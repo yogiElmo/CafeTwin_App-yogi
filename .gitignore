@@ -1,0 +1,30 @@
+# --- Flutter / Dart ---
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.iml
+*.g.dart
+.idea/
+.vscode/
+ios/
+android/
+linux/
+macos/
+windows/
+web/
+!lib/**
+
+# --- Node backends (devops + security) ---
+node_modules/
+npm-debug.log*
+.env
+.env.*
+!.env.example
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db

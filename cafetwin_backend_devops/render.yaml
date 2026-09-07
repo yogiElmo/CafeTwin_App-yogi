@@ -1,0 +1,67 @@
+# Render Blueprint - zero-server deploy for the CafeTwin backend.
+#
+# Usage:
+#   1. Push this repo to GitHub.
+#   2. In Render (render.com): New -> Blueprint -> pick this repo.
+#      Render reads this file and creates both services below.
+#   3. Once live, copy the web service's URL (https://cafetwin-api.onrender.com)
+#      and use it as API_BASE_URL when building the Flutter app.
+#
+# Free tier note: the free Postgres plan expires after 90 days and the
+# free web service spins down when idle (first request after idle takes
+# ~30s to wake up) - fine for a course demo, not for 24/7 production.
+
+databases:
+  - name: cafetwin-db
+    plan: free
+    databaseName: cafetwin
+    user: cafetwin
+
+services:
+  - type: web
+    name: cafetwin-api
+    runtime: node
+    plan: free
+    rootDir: cafetwin_backend_devops
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PGHOST
+        fromDatabase:
+          name: cafetwin-db
+          property: host
+      - key: PGPORT
+        fromDatabase:
+          name: cafetwin-db
+          property: port
+      - key: PGDATABASE
+        fromDatabase:
+          name: cafetwin-db
+          property: database
+      - key: PGUSER
+        fromDatabase:
+          name: cafetwin-db
+          property: user
+      - key: PGPASSWORD
+        fromDatabase:
+          name: cafetwin-db
+          property: password
+      - key: PGSSLMODE
+        value: require
+      - key: CORS_ORIGINS
+        value: "*"   # tighten to your GitHub Pages URL once you know it
+      - key: API_KEY
+        generateValue: true
+      # Squid gateway automation - only meaningful if your Squid box has a
+      # public IP/port reachable from Render (a home/café LAN behind NAT
+      # is NOT reachable by default; you'd need port-forwarding or a
+      # reverse SSH tunnel). Leave SQUID_HOST blank to dry-run instead.
+      - key: SQUID_HOST
+        value: ""
+      - key: SQUID_SSH_USER
+        value: cafetwin
+      - key: SQUID_SCRIPT_PATH
+        value: /opt/cafetwin/toggle_throttle.sh

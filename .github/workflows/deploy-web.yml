@@ -1,0 +1,73 @@
+# Builds the Flutter web app and publishes it to GitHub Pages on every
+# push to main, so you get a live URL instead of running `flutter run`
+# each time you want to see a change.
+#
+# One-time setup after your first push:
+#   1. Repo Settings -> Pages -> Source: "GitHub Actions".
+#   2. (Optional, to connect a live backend) Settings -> Secrets and
+#      variables -> Actions -> New repository variable:
+#        API_BASE_URL = https://your-backend.onrender.com
+#      Leave it unset to ship the app in pure offline-simulation mode.
+#
+# Your site will be published at:
+#   https://<your-github-username>.github.io/<this-repo-name>/
+
+name: Deploy Flutter web to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "cafetwin_backend_devops/**"
+      - "cafetwin_backend_security/**"
+      - "squid_proxy/**"
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # This repo ships lib/ + pubspec.yaml only (see README) - the web/
+      # platform folder is generated on demand rather than committed.
+      - name: Generate web platform folder if missing
+        run: test -d web || flutter create . --platforms=web
+
+      - run: flutter pub get
+
+      # --base-href must match the repo name so assets resolve correctly
+      # under https://<user>.github.io/<repo>/
+      - name: Build web
+        run: |
+          flutter build web --release \
+            --base-href "/${{ github.event.repository.name }}/" \
+            --dart-define=API_BASE_URL="${{ vars.API_BASE_URL }}"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

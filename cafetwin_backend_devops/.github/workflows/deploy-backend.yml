@@ -1,0 +1,63 @@
+# ============================================================
+# CafeTwin Backend - GitHub Actions CI/CD Pipeline
+# Author : Harsimranjeet Singh (SCI6284)
+# Sprint : Week 7 - Automated Backend Build & Deploy
+#
+# This pipeline is for deploying to a VM/VPS you already control (a Docker
+# Hub account + a reachable server with SSH + Docker installed). If you
+# don't have a server yet, use Render instead - see
+# cafetwin_backend_devops/render.yaml and DEPLOYMENT.md, which needs none
+# of the secrets below.
+# ============================================================
+
+name: Deploy CafeTwin Backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cafetwin_backend_devops/**"
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    # Only runs once these secrets are set in
+    # Settings -> Secrets and variables -> Actions. Safe to leave unset:
+    # the job just won't trigger meaningfully until DOCKER_USERNAME exists.
+    if: ${{ vars.ENABLE_VM_DEPLOY == 'true' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./cafetwin_backend_devops
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/cafetwin-api:latest
+            ${{ secrets.DOCKER_USERNAME }}/cafetwin-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to cloud server via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/cafetwin
+            docker compose pull backend
+            docker compose up -d --no-deps backend
+            docker system prune -f
