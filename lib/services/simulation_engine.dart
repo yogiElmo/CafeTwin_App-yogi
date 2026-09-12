@@ -214,10 +214,23 @@ class SimulationEngine {
     _log('Scenario: Calm Afternoon — $ended session(s) ended, floor settling');
   }
 
-  /// Pre-populates a few snapshots so charts and trends have data on launch.
+  /// Pre-populates a few snapshots so charts and trends have non-empty
+  /// history on launch, WITHOUT pretending any simulated time has actually
+  /// passed. This must never start a customer session, change a station's
+  /// mode, or drift its hardware/network readings the way a real _tick()
+  /// does -- a station that was just configured has to still look exactly
+  /// like a station that was just configured (idle, unoccupied, default
+  /// telemetry). Calling the full randomized _tick() here (as this used to)
+  /// made "how many stations are idle right now" a coin flip immediately
+  /// after configure(), since Random() is unseeded: a station could pick up
+  /// a phantom session, or an idle station's temperature could drift with
+  /// noise, before the admin -- or a test -- ever sees the twins.
   void _seed() {
-    for (int i = 0; i < 8; i++) {
-      _tick(notify: false);
+    final DateTime now = DateTime.now();
+    for (final StationTwin twin in _twins) {
+      for (int i = 0; i < 3; i++) {
+        twin.recordSnapshot(now);
+      }
     }
   }
 
