@@ -471,7 +471,15 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong.' });
 });
 
-const PORT = 3000;
-app.listen(PORT, () => {
-  console.log(`CaféTwin backend listening on http://localhost:${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+
+// Only start listening when run directly (`node server.js` / `npm start`).
+// When required from a test file (`require('../server')`), the caller
+// gets the Express app to drive with supertest instead of a live socket.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`CaféTwin backend listening on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
