@@ -1,12 +1,9 @@
-import 'dart:html' as html;
-
-import 'package:flutter/foundation.dart';
-
 import '../models/insight.dart';
 import '../models/report_entry.dart';
 import '../models/station.dart';
 import '../state/cafe_state.dart';
 import 'digital_twin.dart';
+import 'platform/downloader.dart';
 
 /// Builds the downloadable organization reports (CSV + plain-text summary)
 /// from the persistent insight record kept by [CafeState], and triggers the
@@ -149,24 +146,15 @@ class ReportExporter {
 
   /// Triggers a browser file download of [content] as [filename].
   ///
-  /// Returns true when the download was started (web only); returns false on
-  /// non-web platforms so the caller can show the content in a dialog
-  /// instead. The dart:html usage is guarded by [kIsWeb].
+  /// Returns true when the download was started (web only); returns false
+  /// on every other platform so the caller can show the content another
+  /// way instead (report_screen.dart shows a copyable dialog). The
+  /// platform split lives in services/platform/ so this file -- and
+  /// anything that imports it -- compiles on every Flutter target, not
+  /// just web.
   static bool download(String filename, String content) {
-    if (!kIsWeb) {
-      return false;
-    }
     final String mime =
         filename.endsWith('.csv') ? 'text/csv' : 'text/plain';
-    final html.Blob blob =
-        html.Blob(<String>[content], mime, 'native');
-    final String url = html.Url.createObjectUrlFromBlob(blob);
-    final html.AnchorElement anchor = html.AnchorElement(href: url)
-      ..setAttribute('download', filename);
-    html.document.body?.append(anchor);
-    anchor.click();
-    anchor.remove();
-    html.Url.revokeObjectUrl(url);
-    return true;
+    return triggerBrowserDownload(filename, content, mime);
   }
 }
