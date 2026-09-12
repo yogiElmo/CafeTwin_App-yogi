@@ -34,7 +34,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    # Gates the build below on a green test suite -- see flutter-tests.yml
+    # for the same checks run on pull requests / feature branches too.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Generate web platform folder if missing
+        run: test -d web || flutter create . --platforms=web
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

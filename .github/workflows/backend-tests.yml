@@ -1,0 +1,64 @@
+# Runs the backend's Jest + Supertest suite against a real, disposable
+# Postgres service container on every push/PR that touches the backend,
+# so a broken auth flow or a bad migration is caught before merge --
+# not just on a laptop with no database running, where the DB-backed
+# assertions in tests/auth.test.js silently no-op instead of failing.
+
+name: Backend tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cafetwin_backend_devops/**"
+      - ".github/workflows/backend-tests.yml"
+  pull_request:
+    paths:
+      - "cafetwin_backend_devops/**"
+      - ".github/workflows/backend-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cafetwin_backend_devops
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cafetwin
+          POSTGRES_PASSWORD: cafetwin_ci
+          POSTGRES_DB: cafetwin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U cafetwin"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: cafetwin
+      PGUSER: cafetwin
+      PGPASSWORD: cafetwin_ci
+      JWT_SECRET: ci-test-secret-do-not-use-in-production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: cafetwin_backend_devops/package-lock.json
+
+      - run: npm ci
+
+      # psql picks up PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE from the
+      # job env above automatically -- no extra flags needed.
+      - name: Load schema
+        run: psql -f init.sql
+
+      - run: npm test

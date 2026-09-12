@@ -1,0 +1,44 @@
+# Runs `flutter analyze` + `flutter test` on every push/PR that touches
+# the Flutter app, so a broken widget or a failing unit test is caught
+# before merge -- rather than the first time anyone notices being the
+# next demo. deploy-web.yml also runs this same suite as a gate right
+# before it builds/publishes the site (see its `test` job); this file
+# additionally covers pull requests and feature branches, where nothing
+# is being deployed.
+
+name: Flutter tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lib/**"
+      - "test/**"
+      - "pubspec.yaml"
+      - ".github/workflows/flutter-tests.yml"
+  pull_request:
+    paths:
+      - "lib/**"
+      - "test/**"
+      - "pubspec.yaml"
+      - ".github/workflows/flutter-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # This repo ships lib/ + pubspec.yaml only (see README) - the web/
+      # platform folder is generated on demand rather than committed.
+      - name: Generate web platform folder if missing
+        run: test -d web || flutter create . --platforms=web
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test

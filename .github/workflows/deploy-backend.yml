@@ -8,6 +8,14 @@
 # don't have a server yet, use Render instead - see
 # cafetwin_backend_devops/render.yaml and DEPLOYMENT.md, which needs none
 # of the secrets below.
+#
+# NOTE: this file has to live at .github/workflows/ in the REPO ROOT to
+# run at all -- GitHub Actions only ever looks there, and silently ignores
+# workflow files anywhere else (including the
+# cafetwin_backend_devops/.github/workflows/ copy this used to live at,
+# which never actually ran). It was moved here and gated on the `test`
+# job below, so a broken backend can no longer reach the deploy step even
+# once ENABLE_VM_DEPLOY is turned on.
 # ============================================================
 
 name: Deploy CafeTwin Backend
@@ -20,7 +28,56 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    # Mirrors the job in backend-tests.yml (duplicated rather than shared
+    # via a reusable workflow, so this deploy pipeline stays self-contained
+    # and readable top-to-bottom). Keep the two in sync if the test setup
+    # ever changes.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cafetwin_backend_devops
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cafetwin
+          POSTGRES_PASSWORD: cafetwin_ci
+          POSTGRES_DB: cafetwin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U cafetwin"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: cafetwin
+      PGUSER: cafetwin
+      PGPASSWORD: cafetwin_ci
+      JWT_SECRET: ci-test-secret-do-not-use-in-production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: cafetwin_backend_devops/package-lock.json
+
+      - run: npm ci
+
+      # psql picks up PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE from the
+      # job env above automatically -- no extra flags needed.
+      - name: Load schema
+        run: psql -f init.sql
+
+      - run: npm test
+
   build-and-deploy:
+    needs: test
     runs-on: ubuntu-latest
     # Only runs once these secrets are set in
     # Settings -> Secrets and variables -> Actions. Safe to leave unset:
