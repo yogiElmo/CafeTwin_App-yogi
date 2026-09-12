@@ -1,4 +1,13 @@
 analyzer:
+  # `flutter create .` (run in CI to scaffold the uncommitted web/
+  # platform folder -- see .github/workflows/) regenerates a generic
+  # test/widget_test.dart referencing a class called MyApp, which
+  # doesn't exist in this project (the root widget is CafeTwinApp).
+  # That stale template is never part of this repo and carries no
+  # real coverage, so it's excluded outright rather than chased every
+  # time tooling recreates it.
+  exclude:
+    - test/widget_test.dart
   language:
     strict-casts: true
     strict-inference: true
