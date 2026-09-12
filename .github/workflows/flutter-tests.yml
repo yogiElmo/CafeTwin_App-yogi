@@ -37,7 +37,16 @@ jobs:
       # This repo ships lib/ + pubspec.yaml only (see README) - the web/
       # platform folder is generated on demand rather than committed.
       - name: Generate web platform folder if missing
-        run: test -d web || flutter create . --platforms=web
+        run: |
+          test -d web || flutter create . --platforms=web
+          # `flutter create .` also drops in a generic test/widget_test.dart
+          # (referencing a class called MyApp) whenever one doesn't already
+          # exist -- this project's root widget is CafeTwinApp, so that
+          # stale boilerplate fails `flutter analyze`/`flutter test`. Our
+          # real suite (test/rules_engine_test.dart, insights_engine_test.dart,
+          # login_screen_test.dart) covers this app; drop the placeholder so
+          # it can't shadow them.
+          rm -f test/widget_test.dart
 
       - run: flutter pub get
       - run: flutter analyze
