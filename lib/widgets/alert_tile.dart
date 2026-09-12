@@ -24,7 +24,7 @@ class AlertTile extends StatelessWidget {
         ? StatusColors.critical
         : StatusColors.warning;
     final bool dimmed = alert.acknowledged || alert.resolved;
-    final Color muted = Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
+    final Color muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
 
     final List<String> lifecycle = <String>[
       if (alert.acknowledged) 'Acknowledged',
@@ -87,10 +87,10 @@ class AlertTile extends StatelessWidget {
                               vertical: 8,
                             ),
                             decoration: BoxDecoration(
-                              color: StatusColors.warning.withOpacity(0.10),
+                              color: StatusColors.warning.withValues(alpha: 0.10),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: StatusColors.warning.withOpacity(0.35),
+                                color: StatusColors.warning.withValues(alpha: 0.35),
                               ),
                             ),
                             child: Row(
@@ -114,7 +114,7 @@ class AlertTile extends StatelessWidget {
                                       color: Theme.of(context)
                                           .colorScheme
                                           .onSurface
-                                          .withOpacity(0.85),
+                                          .withValues(alpha: 0.85),
                                     ),
                                   ),
                                 ),

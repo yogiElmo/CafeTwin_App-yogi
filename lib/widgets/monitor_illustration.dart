@@ -106,15 +106,15 @@ class _MonitorPainter extends CustomPainter {
         center: const Alignment(0, -0.15),
         radius: 0.85,
         colors: <Color>[
-          statusColor.withOpacity(occupied ? 0.30 : 0.14),
-          statusColor.withOpacity(0.0),
+          statusColor.withValues(alpha: occupied ? 0.30 : 0.14),
+          statusColor.withValues(alpha: 0.0),
         ],
       ).createShader(screenRect);
     canvas.drawRRect(screen, glow);
 
     // --- Tiny dim telemetry rows near the top-left of the screen. ---
     final Paint line = Paint()
-      ..color = _telemetry.withOpacity(0.28)
+      ..color = _telemetry.withValues(alpha: 0.28)
       ..strokeWidth = 1.4
       ..strokeCap = StrokeCap.round;
     final double lineLeft = screenRect.left + screenRect.width * 0.12;
@@ -144,7 +144,7 @@ class _MonitorPainter extends CustomPainter {
       ..lineTo(x0 + span * 0.64, baseY)
       ..lineTo(x1, baseY);
     final Paint pulsePaint = Paint()
-      ..color = statusColor.withOpacity(occupied ? 0.75 : 0.40)
+      ..color = statusColor.withValues(alpha: occupied ? 0.75 : 0.40)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.3
       ..strokeJoin = StrokeJoin.round

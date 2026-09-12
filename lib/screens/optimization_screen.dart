@@ -74,12 +74,12 @@ class OptimizationScreen extends StatelessWidget {
 
   Widget _heroCard(BuildContext context, int idle, double dailySavings) {
     final Color muted =
-        Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
     return Card(
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: _amber.withOpacity(0.35)),
+        side: BorderSide(color: _amber.withValues(alpha: 0.35)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -91,7 +91,7 @@ class OptimizationScreen extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
-                color: _amber.withOpacity(0.9),
+                color: _amber.withValues(alpha: 0.9),
                 letterSpacing: 1.6,
               ),
             ),
@@ -124,7 +124,7 @@ class OptimizationScreen extends StatelessWidget {
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: _green.withOpacity(0.35)),
+        side: BorderSide(color: _green.withValues(alpha: 0.35)),
       ),
       child: const Padding(
         padding: EdgeInsets.all(12),
@@ -156,7 +156,7 @@ class OptimizationScreen extends StatelessWidget {
     required String impact,
   }) {
     final Color onSurface = Theme.of(context).colorScheme.onSurface;
-    final Color muted = onSurface.withOpacity(0.55);
+    final Color muted = onSurface.withValues(alpha: 0.55);
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -168,7 +168,7 @@ class OptimizationScreen extends StatelessWidget {
               width: 38,
               height: 38,
               decoration: BoxDecoration(
-                color: _amber.withOpacity(0.12),
+                color: _amber.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
               ),
               child: Icon(icon, color: _amber, size: 20),
@@ -183,7 +183,7 @@ class OptimizationScreen extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
-                      color: onSurface.withOpacity(0.9),
+                      color: onSurface.withValues(alpha: 0.9),
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -198,9 +198,9 @@ class OptimizationScreen extends StatelessWidget {
                       vertical: 3,
                     ),
                     decoration: BoxDecoration(
-                      color: _amber.withOpacity(0.10),
+                      color: _amber.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: _amber.withOpacity(0.30)),
+                      border: Border.all(color: _amber.withValues(alpha: 0.30)),
                     ),
                     child: Text(
                       impact,

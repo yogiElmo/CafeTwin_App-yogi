@@ -25,7 +25,7 @@ class SimulationScreen extends StatelessWidget {
       animation: state,
       builder: (BuildContext context, Widget? child) {
         final Color muted =
-            Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
+            Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
         final List<String> log = state.eventLog;
 
         return ListView(
@@ -64,7 +64,7 @@ class SimulationScreen extends StatelessWidget {
                   fontSize: 13,
                   height: 1.35,
                   color:
-                      Theme.of(context).colorScheme.onSurface.withOpacity(0.85),
+                      Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.85),
                 ),
               ),
             ),
@@ -238,7 +238,7 @@ class SimulationScreen extends StatelessWidget {
         fontSize: 13,
         fontWeight: FontWeight.w700,
         letterSpacing: 0.4,
-        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.75),
+        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.75),
       ),
     );
   }
@@ -263,7 +263,7 @@ class SimulationScreen extends StatelessWidget {
         style: ElevatedButton.styleFrom(
           foregroundColor: _amber,
           backgroundColor: const Color(0xFF2E2822),
-          side: BorderSide(color: _amber.withOpacity(0.35)),
+          side: BorderSide(color: _amber.withValues(alpha: 0.35)),
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           padding: const EdgeInsets.symmetric(horizontal: 8),

@@ -142,7 +142,7 @@ class ReportScreen extends StatelessWidget {
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w700,
-          color: _amber.withOpacity(0.9),
+          color: _amber.withValues(alpha: 0.9),
           letterSpacing: 1.6,
         ),
       ),
@@ -151,7 +151,7 @@ class ReportScreen extends StatelessWidget {
 
   Widget _headerCard(BuildContext context, List<StationTwin> twins) {
     final Color onSurface = Theme.of(context).colorScheme.onSurface;
-    final Color muted = onSurface.withOpacity(0.55);
+    final Color muted = onSurface.withValues(alpha: 0.55);
     final Map<String, int> perCategory = <String, int>{};
     for (final StationTwin twin in twins) {
       perCategory.update(twin.station.category, (int c) => c + 1,
@@ -164,7 +164,7 @@ class ReportScreen extends StatelessWidget {
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: _amber.withOpacity(0.35)),
+        side: BorderSide(color: _amber.withValues(alpha: 0.35)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -176,7 +176,7 @@ class ReportScreen extends StatelessWidget {
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w800,
-                color: onSurface.withOpacity(0.95),
+                color: onSurface.withValues(alpha: 0.95),
               ),
             ),
             const SizedBox(height: 6),
@@ -237,7 +237,7 @@ class ReportScreen extends StatelessWidget {
 
   Widget _stationCard(BuildContext context, StationTwin twin) {
     final Color onSurface = Theme.of(context).colorScheme.onSurface;
-    final Color muted = onSurface.withOpacity(0.55);
+    final Color muted = onSurface.withValues(alpha: 0.55);
     final StationStatus status = state.statusFor(twin.id);
     final int insightCount = state.recordsFor(twin.id).length;
     final bool occupied = twin.session.occupied;
@@ -267,7 +267,7 @@ class ReportScreen extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 13.5,
                       fontWeight: FontWeight.w700,
-                      color: onSurface.withOpacity(0.92),
+                      color: onSurface.withValues(alpha: 0.92),
                     ),
                   ),
                 ),
@@ -277,9 +277,9 @@ class ReportScreen extends StatelessWidget {
                     vertical: 3,
                   ),
                   decoration: BoxDecoration(
-                    color: _amber.withOpacity(0.10),
+                    color: _amber.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: _amber.withOpacity(0.30)),
+                    border: Border.all(color: _amber.withValues(alpha: 0.30)),
                   ),
                   child: Text(
                     twin.station.category,
@@ -318,7 +318,7 @@ class ReportScreen extends StatelessWidget {
           style: TextStyle(
             fontSize: 12.5,
             color:
-                Theme.of(context).colorScheme.onSurface.withOpacity(0.55),
+                Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55),
           ),
         ),
       ),
@@ -327,7 +327,7 @@ class ReportScreen extends StatelessWidget {
 
   Widget _recordTile(BuildContext context, ReportEntry entry) {
     final Color onSurface = Theme.of(context).colorScheme.onSurface;
-    final Color muted = onSurface.withOpacity(0.55);
+    final Color muted = onSurface.withValues(alpha: 0.55);
     final bool isOptimization = entry.kind == InsightKind.optimization;
     final Color kindColor = isOptimization ? _amber : _green;
     final IconData kindIcon =
@@ -343,7 +343,7 @@ class ReportScreen extends StatelessWidget {
               width: 32,
               height: 32,
               decoration: BoxDecoration(
-                color: kindColor.withOpacity(0.12),
+                color: kindColor.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
               ),
               child: Icon(kindIcon, color: kindColor, size: 17),
@@ -362,7 +362,7 @@ class ReportScreen extends StatelessWidget {
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
                       fontFamily: 'monospace',
-                      color: onSurface.withOpacity(0.92),
+                      color: onSurface.withValues(alpha: 0.92),
                     ),
                   ),
                   if (entry.detail.isNotEmpty) ...<Widget>[
@@ -389,10 +389,10 @@ class ReportScreen extends StatelessWidget {
                             vertical: 2,
                           ),
                           decoration: BoxDecoration(
-                            color: _amber.withOpacity(0.10),
+                            color: _amber.withValues(alpha: 0.10),
                             borderRadius: BorderRadius.circular(6),
                             border:
-                                Border.all(color: _amber.withOpacity(0.30)),
+                                Border.all(color: _amber.withValues(alpha: 0.30)),
                           ),
                           child: Text(
                             entry.impact,

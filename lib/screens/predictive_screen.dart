@@ -68,7 +68,7 @@ class PredictiveScreen extends StatelessWidget {
                   fontSize: 13,
                   height: 1.35,
                   color:
-                      Theme.of(context).colorScheme.onSurface.withOpacity(0.85),
+                      Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.85),
                 ),
               ),
             ),
@@ -83,7 +83,7 @@ class PredictiveScreen extends StatelessWidget {
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: _green.withOpacity(0.35)),
+        side: BorderSide(color: _green.withValues(alpha: 0.35)),
       ),
       child: const Padding(
         padding: EdgeInsets.all(12),
@@ -109,12 +109,12 @@ class PredictiveScreen extends StatelessWidget {
 
   Widget _forecastCard(BuildContext context, Insight forecast) {
     final Color onSurface = Theme.of(context).colorScheme.onSurface;
-    final Color muted = onSurface.withOpacity(0.55);
+    final Color muted = onSurface.withValues(alpha: 0.55);
     return Card(
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: forecast.color.withOpacity(0.35)),
+        side: BorderSide(color: forecast.color.withValues(alpha: 0.35)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -125,7 +125,7 @@ class PredictiveScreen extends StatelessWidget {
               width: 38,
               height: 38,
               decoration: BoxDecoration(
-                color: forecast.color.withOpacity(0.12),
+                color: forecast.color.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
               ),
               child: Icon(forecast.icon, color: forecast.color, size: 20),
@@ -140,7 +140,7 @@ class PredictiveScreen extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
-                      color: onSurface.withOpacity(0.9),
+                      color: onSurface.withValues(alpha: 0.9),
                     ),
                   ),
                   const SizedBox(height: 4),

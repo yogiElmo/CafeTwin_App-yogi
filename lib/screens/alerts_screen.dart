@@ -42,7 +42,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
             ? all
             : all.where((Alert a) => a.category == _filter).toList();
         final Color muted =
-            Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
+            Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
 
         return Column(
           children: <Widget>[

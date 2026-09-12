@@ -119,7 +119,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     final Color dim =
-        Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
 
     return Scaffold(
       body: SafeArea(
@@ -131,7 +131,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Card(
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
-                  side: BorderSide(color: _amber.withOpacity(0.30)),
+                  side: BorderSide(color: _amber.withValues(alpha: 0.30)),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(28),

@@ -30,7 +30,7 @@ class SparklineChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color muted = Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
+    final Color muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[

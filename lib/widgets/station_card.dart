@@ -49,7 +49,7 @@ class StationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Color statusColor = StatusColors.forStatus(status);
-    final Color muted = Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
+    final Color muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
     final bool occupied = twin.session.occupied;
 
     return Card(
@@ -59,7 +59,7 @@ class StationCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         // Very subtle status-tinted border glow; keeps the warm,
         // low-saturation look while hinting at station health.
-        side: BorderSide(color: statusColor.withOpacity(0.30)),
+        side: BorderSide(color: statusColor.withValues(alpha: 0.30)),
       ),
       child: InkWell(
         onTap: onTap,
@@ -118,7 +118,7 @@ class StationCard extends StatelessWidget {
                   color: Theme.of(context)
                       .colorScheme
                       .onSurface
-                      .withOpacity(0.55),
+                      .withValues(alpha: 0.55),
                 ),
               ),
               const Spacer(),

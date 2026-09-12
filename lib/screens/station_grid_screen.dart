@@ -61,7 +61,7 @@ class StationGridScreen extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w700,
-              color: _amber.withOpacity(0.9),
+              color: _amber.withValues(alpha: 0.9),
               letterSpacing: 1.6,
             ),
           ),
@@ -228,7 +228,7 @@ class _FeaturePanel extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
-                color: _amber.withOpacity(0.9),
+                color: _amber.withValues(alpha: 0.9),
                 letterSpacing: 1.6,
               ),
             ),
@@ -276,7 +276,7 @@ class _FeatureCard extends StatelessWidget {
         color: _fill,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: _amber.withOpacity(0.35)),
+          side: BorderSide(color: _amber.withValues(alpha: 0.35)),
         ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -289,7 +289,7 @@ class _FeatureCard extends StatelessWidget {
                   width: 46,
                   height: 46,
                   decoration: BoxDecoration(
-                    color: _amber.withOpacity(0.12),
+                    color: _amber.withValues(alpha: 0.12),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(icon, color: _amber, size: 28),
@@ -307,7 +307,7 @@ class _FeatureCard extends StatelessWidget {
                         style: TextStyle(
                           fontSize: titleFontSize,
                           fontWeight: FontWeight.w700,
-                          color: onSurface.withOpacity(0.92),
+                          color: onSurface.withValues(alpha: 0.92),
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -318,7 +318,7 @@ class _FeatureCard extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 11.5,
                           height: 1.3,
-                          color: onSurface.withOpacity(0.55),
+                          color: onSurface.withValues(alpha: 0.55),
                         ),
                       ),
                     ],
@@ -328,7 +328,7 @@ class _FeatureCard extends StatelessWidget {
                 Icon(
                   Icons.chevron_right,
                   size: 22,
-                  color: onSurface.withOpacity(0.40),
+                  color: onSurface.withValues(alpha: 0.40),
                 ),
               ],
             ),

@@ -48,7 +48,7 @@ class TempGauge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color muted = Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
+    final Color muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final double size = constraints.hasBoundedWidth

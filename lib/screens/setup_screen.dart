@@ -172,7 +172,7 @@ class _SetupScreenState extends State<SetupScreen> {
   @override
   Widget build(BuildContext context) {
     final Color dim =
-        Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
 
     return Scaffold(
       appBar: AppBar(
@@ -187,7 +187,7 @@ class _SetupScreenState extends State<SetupScreen> {
               margin: const EdgeInsets.all(16),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
-                side: BorderSide(color: _amber.withOpacity(0.30)),
+                side: BorderSide(color: _amber.withValues(alpha: 0.30)),
               ),
               child: ListView(
                 padding: const EdgeInsets.all(24),
@@ -254,7 +254,7 @@ class _SetupScreenState extends State<SetupScreen> {
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
-                          color: _amber.withOpacity(0.9),
+                          color: _amber.withValues(alpha: 0.9),
                           letterSpacing: 1.4,
                         ),
                       ),
