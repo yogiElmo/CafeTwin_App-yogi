@@ -117,6 +117,35 @@ cd cafetwin_backend_devops && cp .env.example .env && npm install && npm start
 flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:3000
 ```
 
+### 6. Real authentication (replaces the hardcoded demo login)
+
+The login screen used to accept a single hardcoded username/password/PIN
+baked into the app and printed on screen. It now authenticates against
+the backend: `POST /auth/login` checks bcrypt-hashed credentials in the
+new `admins` table and returns a JWT, which the app stores with
+`flutter_secure_storage` and sends as `Authorization: Bearer <token>` on
+every write. The old `x-api-key` gate still works too, for service
+callers (like `simulate.js`) that never go through a human login.
+
+One-time setup after `init.sql` has run:
+```bash
+cd cafetwin_backend_devops
+ADMIN_USERNAME=youradminname ADMIN_PASSWORD=... ADMIN_PIN=1234 npm run seed
+# or just `npm run seed` with nothing set -- it generates and prints a
+# password + PIN once.
+```
+Run it again any time to rotate the password. Set `JWT_SECRET` to a
+long random value in production (see `.env.example`); if left unset the
+backend generates one per process, which is safe but means everyone is
+logged out on every restart/redeploy.
+
+The app itself now needs `API_BASE_URL` configured to log in at all --
+see `lib/services/auth_service.dart`. Pure offline-simulation mode
+(no backend) intentionally has no login bypass any more; if you need a
+backend-free demo, pass `--dart-define=DEMO_USERNAME=...
+--dart-define=DEMO_PASSWORD=... --dart-define=DEMO_PIN=...` at build/run
+time instead of hardcoding anything in source.
+
 ## Notes / things left as-is on purpose
 
 - `ApiService` doesn't sync acknowledge/resolve state *back* from the app

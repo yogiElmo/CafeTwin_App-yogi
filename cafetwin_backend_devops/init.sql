@@ -69,3 +69,15 @@ CREATE TABLE IF NOT EXISTS report_entries (
   first_seen      TIMESTAMPTZ DEFAULT now(),
   last_seen       TIMESTAMPTZ DEFAULT now()
 );
+
+-- Admin login accounts for the Flutter app's auth screen. Created/updated
+-- by `npm run seed` (see seed.js) -- never insert plaintext credentials
+-- here directly.
+CREATE TABLE IF NOT EXISTS admins (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  username      TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  pin_hash      TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'admin',
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
