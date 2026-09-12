@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/station.dart';
+import '../services/auth_service.dart';
 import '../state/cafe_state.dart';
 import '../widgets/monitor_illustration.dart';
 import 'setup_screen.dart';
@@ -8,18 +9,14 @@ import 'setup_screen.dart';
 /// Onboarding page 1: admin login.
 ///
 /// A centered card on the dark background with three fields (username,
-/// password, authentication PIN). Valid credentials are hardcoded demo
-/// constants; on success the admin is pushed (replacement) to the
-/// organization setup screen.
+/// password, authentication PIN). Credentials are checked against the
+/// backend's POST /auth/login (see [AuthService]) -- there are no
+/// credentials baked into the app. On success the admin is pushed
+/// (replacement) to the organization setup screen.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.state});
 
   final CafeState state;
-
-  /// Hardcoded demo credentials.
-  static const String validUsername = 'ICT907';
-  static const String validPassword = 'CapstoneProject';
-  static const String validPin = '2150';
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -35,6 +32,28 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _pinController = TextEditingController();
 
   String? _error;
+  bool _submitting = false;
+  bool _checkingSession = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _tryRestoreSession();
+  }
+
+  /// If a previously-issued token is still stored (e.g. the app was
+  /// relaunched), skip straight to setup instead of asking for
+  /// credentials again. An expired token simply fails on first use,
+  /// which the rest of the app already treats as a best-effort call.
+  Future<void> _tryRestoreSession() async {
+    final bool restored = await AuthService.restoreSession();
+    if (!mounted) return;
+    if (restored) {
+      _goToSetup();
+      return;
+    }
+    setState(() => _checkingSession = false);
+  }
 
   @override
   void dispose() {
@@ -44,22 +63,34 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _login() {
-    final bool ok =
-        _usernameController.text.trim() == LoginScreen.validUsername &&
-            _passwordController.text == LoginScreen.validPassword &&
-            _pinController.text.trim() == LoginScreen.validPin;
-    if (!ok) {
-      setState(() {
-        _error = 'Invalid username, password or PIN — please try again.';
-      });
-      return;
-    }
+  void _goToSetup() {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (BuildContext context) => SetupScreen(state: widget.state),
       ),
     );
+  }
+
+  Future<void> _login() async {
+    if (_submitting) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    final String? error = await AuthService.login(
+      username: _usernameController.text.trim(),
+      password: _passwordController.text,
+      pin: _pinController.text.trim(),
+    );
+    if (!mounted) return;
+    if (error != null) {
+      setState(() {
+        _submitting = false;
+        _error = error;
+      });
+      return;
+    }
+    _goToSetup();
   }
 
   InputDecoration _fieldDecoration(String label, IconData icon) {
@@ -81,6 +112,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_checkingSession) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     final Color dim =
         Theme.of(context).colorScheme.onSurface.withOpacity(0.55);
 
@@ -162,7 +199,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ],
                       const SizedBox(height: 24),
                       ElevatedButton(
-                        onPressed: _login,
+                        onPressed: _submitting ? null : _login,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _amber,
                           foregroundColor: const Color(0xFF1E1B18),
@@ -175,15 +212,26 @@ class _LoginScreenState extends State<LoginScreen> {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        child: const Text('Login'),
+                        child: _submitting
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  color: Color(0xFF1E1B18),
+                                ),
+                              )
+                            : const Text('Login'),
                       ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Demo credentials: ${LoginScreen.validUsername} / '
-                        '${LoginScreen.validPassword} / ${LoginScreen.validPin}',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 11, color: dim),
-                      ),
+                      if (AuthService.hasDemoFallback) ...<Widget>[
+                        const SizedBox(height: 16),
+                        Text(
+                          'Offline demo mode: signing in with the '
+                          'configured demo credentials (no backend).',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 11, color: dim),
+                        ),
+                      ],
                     ],
                   ),
                 ),

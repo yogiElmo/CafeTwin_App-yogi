@@ -31,12 +31,28 @@ class ApiService {
   static const String _apiKey =
       String.fromEnvironment('API_KEY', defaultValue: '');
 
+  /// JWT issued by POST /auth/login, set via [setAuthToken] once a human
+  /// admin logs in. When present, it is sent instead of the static
+  /// [_apiKey] on every write -- see [_headers].
+  static String? _authToken;
+
+  /// Backend base URL, exposed so [AuthService] can call /auth/login
+  /// without duplicating the --dart-define configuration.
+  static String get baseUrl => _baseUrl;
+
+  /// Sets (or clears, with null) the JWT attached to future requests.
+  /// Called by [AuthService] after a successful login/logout.
+  static void setAuthToken(String? token) {
+    _authToken = token;
+  }
+
   /// True when a backend URL was supplied at build/run time.
   static bool get isEnabled => _baseUrl.isNotEmpty;
 
   static Map<String, String> get _headers => <String, String>{
         'Content-Type': 'application/json',
-        if (_apiKey.isNotEmpty) 'x-api-key': _apiKey,
+        if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+        if (_authToken == null && _apiKey.isNotEmpty) 'x-api-key': _apiKey,
       };
 
   static Uri _uri(String path) => Uri.parse('$_baseUrl$path');
