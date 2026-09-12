@@ -49,5 +49,7 @@ jobs:
           rm -f test/widget_test.dart
 
       - run: flutter pub get
+      - name: DEBUG list test dir
+        run: ls -la test/ || true
       - run: flutter analyze
       - run: flutter test
