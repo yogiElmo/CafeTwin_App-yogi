@@ -15,6 +15,8 @@ const squidController = require('./squid_controller');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 
@@ -139,6 +141,70 @@ app.post('/auth/login', loginLimiter, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong during login.' });
+  }
+});
+
+// ============================================================
+// ONE-TIME SETUP (schema + first admin account)
+// ============================================================
+// GET, not POST -- so this can be triggered with a single tap/link from
+// a phone browser, no terminal needed. Gated by API_KEY (the same secret
+// render.yaml already generates for this service), so only whoever holds
+// that value can call it; disabled outright if API_KEY was never set.
+// Safe to call more than once: every schema statement in init.sql is
+// `CREATE ... IF NOT EXISTS` and the admin upsert below is
+// `ON CONFLICT ... DO UPDATE`, so re-running this just rotates the admin
+// password/PIN (exactly what `npm run seed` does locally) rather than
+// duplicating anything or wiping existing telemetry/report data.
+function randomSecret(bytes, alphabet) {
+  return Array.from(crypto.randomBytes(bytes))
+    .map((b) => alphabet[b % alphabet.length])
+    .join('');
+}
+
+app.get('/admin/bootstrap', async (req, res) => {
+  if (!process.env.API_KEY) {
+    return res.status(404).end();
+  }
+  if (req.query.key !== process.env.API_KEY) {
+    return res.status(401).json({ error: 'Missing or invalid "key" query parameter.' });
+  }
+  try {
+    const schemaSql = fs.readFileSync(path.join(__dirname, 'init.sql'), 'utf8');
+    await pool.query(schemaSql);
+
+    const username = req.query.username || process.env.ADMIN_USERNAME || 'admin';
+    let password = req.query.password || process.env.ADMIN_PASSWORD;
+    let pin = req.query.pin || process.env.ADMIN_PIN;
+    let generated = false;
+    if (!password) {
+      password = randomSecret(18, 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789');
+      generated = true;
+    }
+    if (!pin) {
+      pin = randomSecret(4, '0123456789');
+      generated = true;
+    }
+    const passwordHash = await bcrypt.hash(password, 12);
+    const pinHash = await bcrypt.hash(pin, 12);
+    await pool.query(
+      `INSERT INTO admins (username, password_hash, pin_hash, role)
+       VALUES ($1, $2, $3, 'admin')
+       ON CONFLICT (username) DO UPDATE
+         SET password_hash = EXCLUDED.password_hash, pin_hash = EXCLUDED.pin_hash`,
+      [username, passwordHash, pinHash]
+    );
+
+    res.json({
+      schema: 'ok',
+      admin: { username, ...(generated ? { password, pin } : {}) },
+      note: generated
+        ? 'Credentials generated just now -- save them, they are not shown again.'
+        : 'Admin account created/updated with the username/password/pin you provided.',
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Bootstrap failed.', detail: err.message });
   }
 });
 
