@@ -15,9 +15,18 @@ import 'setup_screen.dart';
 /// credentials baked into the app. On success the admin is pushed
 /// (replacement) to the organization setup screen.
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, required this.state});
+  const LoginScreen({
+    super.key,
+    required this.state,
+    this.justLoggedOut = false,
+  });
 
   final CafeState state;
+
+  /// True when this screen was reached via a "Logout" action -- shows a
+  /// one-time confirmation snackbar so it's clear the logout actually
+  /// happened, rather than landing back here with no feedback at all.
+  final bool justLoggedOut;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -40,6 +49,17 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _tryRestoreSession();
+    if (widget.justLoggedOut) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You have been logged out.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      });
+    }
   }
 
   /// If a previously-issued token is still stored (e.g. the app was

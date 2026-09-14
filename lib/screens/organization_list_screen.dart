@@ -25,9 +25,11 @@ import 'setup_screen.dart';
 /// a different organization next actually takes effect.
 ///
 /// The AppBar carries its own "Logout" action (full account sign-out, same
-/// as [HomeShell]'s) so an admin who is sitting on this list -- either
-/// right after login or right after logging off an organization -- always
-/// has a way to sign out completely without first having to open one.
+/// as [HomeShell]'s -- confirmation dialog first, then a one-time
+/// "You have been logged out." snackbar once [LoginScreen] loads) so an
+/// admin who is sitting on this list -- either right after login or right
+/// after logging off an organization -- always has a way to sign out
+/// completely without first having to open one.
 class OrganizationListScreen extends StatefulWidget {
   const OrganizationListScreen({
     super.key,
@@ -85,11 +87,36 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
   }
 
   Future<void> _logout() async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        backgroundColor: _surface,
+        title: const Text('Log out?'),
+        content: const Text(
+          "You'll need to sign in again to get back to your organizations.",
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Logout'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     await AuthService.logout();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(
-        builder: (BuildContext context) => LoginScreen(state: widget.state),
+        builder: (BuildContext context) => LoginScreen(
+          state: widget.state,
+          justLoggedOut: true,
+        ),
       ),
       (Route<dynamic> route) => false,
     );
