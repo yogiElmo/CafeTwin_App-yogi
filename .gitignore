@@ -25,6 +25,11 @@ npm-debug.log*
 .env.*
 !.env.example
 
-# --- OS / editor cruft ---
+# --- OS/editor cruft ---
 .DS_Store
 Thumbs.db
+# Local/manual database dumps (scripts/backup.sh) -- never commit real
+# data. The scheduled backup keeps its copies as GitHub Actions artifacts
+# instead; see cafetwin_backend_devops/BACKUP_RESTORE.md.
+cafetwin_backend_devops/backups/
+*.dump
