@@ -13,8 +13,18 @@
 # See cafetwin_backend_devops/BACKUP_RESTORE.md for full setup and restore
 # steps, including what to do if Render's network access rules block
 # GitHub Actions' outbound IPs.
+#
+# PG_MAJOR_VERSION below must be >= the Render Postgres instance's own
+# major version -- pg_dump refuses to run against a NEWER server than
+# itself (an older client dumping a newer server can silently miss new
+# features). If Render is ever upgraded to a newer Postgres major version,
+# bump this number to match (Render dashboard -> your Postgres instance ->
+# Info shows its version) -- see BACKUP_RESTORE.md's troubleshooting note.
 
 name: Database backup
+
+env:
+  PG_MAJOR_VERSION: "18"
 
 on:
   schedule:
@@ -32,8 +42,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      # Installs a specific PostgreSQL client major version rather than
+      # whatever "postgresql-client" happens to resolve to on the runner's
+      # default Ubuntu repos (that defaulted to v16, too old to dump a v18
+      # server -- pg_dump: "aborting because of server version mismatch").
+      # Explicitly ensuring the PGDG apt repo first (rather than assuming
+      # the runner image already has it configured) keeps this working
+      # even if that assumption stops holding on a future runner image.
+      - name: Install PostgreSQL client (v${{ env.PG_MAJOR_VERSION }})
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y "postgresql-client-${PG_MAJOR_VERSION}"
+          echo "/usr/lib/postgresql/${PG_MAJOR_VERSION}/bin" >> "$GITHUB_PATH"
 
       - name: Dump database
         env:
