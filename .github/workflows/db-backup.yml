@@ -1,0 +1,55 @@
+# Scheduled off-site backup of the CaféTwin production database.
+#
+# Render's free/starter Postgres tiers don't include the automatic backup
+# retention the paid plans do, and even where a provider does back a
+# database up, that copy lives on the provider's own infrastructure -- an
+# outage or account issue there could take the only copy with it. This
+# workflow gives the project an independent, scheduled, off-site copy
+# using GitHub Actions' own artifact storage.
+#
+# Requires ONE repository secret: DATABASE_URL -- the external connection
+# string for the Render Postgres instance to back up (Render dashboard ->
+# your Postgres instance -> "Connections" -> "External Database URL").
+# See cafetwin_backend_devops/BACKUP_RESTORE.md for full setup and restore
+# steps, including what to do if Render's network access rules block
+# GitHub Actions' outbound IPs.
+
+name: Database backup
+
+on:
+  schedule:
+    # 03:00 UTC daily -- outside typical café operating hours in any
+    # timezone this project has been run from.
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cafetwin_backend_devops
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Dump database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL secret is not set -- see BACKUP_RESTORE.md." >&2
+            exit 1
+          fi
+          chmod +x scripts/backup.sh
+          BACKUP_DIR="$PWD/backups" ./scripts/backup.sh
+
+      - name: Upload dump as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cafetwin-db-backup-${{ github.run_id }}
+          path: cafetwin_backend_devops/backups/*.dump
+          retention-days: 30
+          if-no-files-found: error
