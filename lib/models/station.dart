@@ -20,6 +20,19 @@ class Station {
     );
   }
 
+  /// Builds a station from the backend's own representation (as returned
+  /// inside `GET /organizations/:id`'s `stations` array) -- keeps the
+  /// backend's real station id rather than regenerating one locally, so an
+  /// organization reopened from [OrganizationListScreen] posts telemetry
+  /// and alerts against the same rows the backend already knows about.
+  factory Station.fromJson(Map<String, dynamic> json) {
+    return Station(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      category: json['category'] as String? ?? 'Gaming',
+    );
+  }
+
   /// Short machine identifier, e.g. `ST-01`.
   final String id;
 

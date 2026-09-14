@@ -1,5 +1,5 @@
 -- ============================================================
--- CaféTwin — PostgreSQL Database Schema (Week 7)
+-- Cafï¿½Twin ï¿½ PostgreSQL Database Schema (Week 7)
 -- Creates all 6 core tables for the digital twin backend
 -- ============================================================
 
@@ -81,3 +81,16 @@ CREATE TABLE IF NOT EXISTS admins (
   role          TEXT NOT NULL DEFAULT 'admin',
   created_at    TIMESTAMPTZ DEFAULT now()
 );
+
+-- Which admin account registered each organization, so an admin's "My
+-- Organizations" list (GET /organizations) can be scoped to their own.
+-- Added after both tables above already exist -- ADD COLUMN IF NOT EXISTS
+-- keeps this file safe to re-run against a database that predates this
+-- column (e.g. via /admin/bootstrap), same as every other statement here.
+-- Nullable: existing organizations created before this column existed, or
+-- ones created via the legacy x-api-key service path, simply have no owner.
+-- ON DELETE SET NULL rather than the default NO ACTION -- removing an admin
+-- account must never be blocked by (or cascade-delete) the organizations
+-- they set up; those just become unowned, exactly like the x-api-key case.
+ALTER TABLE organizations
+  ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES admins(id) ON DELETE SET NULL;

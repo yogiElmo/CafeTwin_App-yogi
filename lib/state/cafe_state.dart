@@ -101,6 +101,38 @@ class CafeState extends ChangeNotifier {
     });
   }
 
+  /// Loads a previously-created organization (as returned by
+  /// `GET /organizations/:id`) and starts a fresh simulation for its
+  /// existing station roster, without re-registering with the backend --
+  /// used when an admin picks an organization from [OrganizationListScreen]
+  /// instead of creating a new one via [configure].
+  ///
+  /// Reuses the backend's own station ids/names/categories (via
+  /// [Station.fromJson]) rather than regenerating them locally, so
+  /// telemetry/alerts posted from this session land against the same rows
+  /// the backend already has for this organization.
+  ///
+  /// Note: only the station roster is restored -- there's no persisted
+  /// "live" telemetry/alert state to resume, so the simulation starts
+  /// fresh for these stations, exactly as if they were just configured.
+  /// Safe to call only once, same as [configure].
+  void loadExisting({
+    required String organizationId,
+    required String company,
+    required List<Station> stations,
+  }) {
+    if (_isConfigured) {
+      return;
+    }
+    _initSimulation(stations);
+    _companyName = company;
+    _configuredAt = DateTime.now();
+    _isConfigured = true;
+    _backendOrgId = organizationId;
+    _engine!.start();
+    notifyListeners();
+  }
+
   /// Shared twin/engine creation used by [configure] (mirrors what the
   /// constructor used to do, minus starting the engine).
   void _initSimulation(List<Station> stations) {

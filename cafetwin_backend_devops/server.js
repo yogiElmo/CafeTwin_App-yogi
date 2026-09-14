@@ -162,7 +162,7 @@ app.post('/auth/login', loginLimiter, async (req, res) => {
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
-    res.json({ token, expiresIn: JWT_EXPIRES_IN, role: admin.role });
+    res.json({ token, expiresIn: JWT_EXPIRES_IN, role: admin.role, username: admin.username });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong during login.' });
@@ -280,9 +280,59 @@ app.post('/admin/users', requireRole('admin'), async (req, res) => {
   }
 });
 
+// Admin-only: removes a login account. Two guards keep an admin from
+// locking themselves (or everyone) out: you can't delete the account
+// you're currently logged in as, and you can't delete the last remaining
+// admin account, even a different one than your own.
+app.delete('/admin/users/:username', requireRole('admin'), async (req, res) => {
+  const { username } = req.params;
+  if (username === req.user.username) {
+    return res.status(400).json({ error: 'You cannot delete the account you are logged in as.' });
+  }
+  try {
+    const target = await pool.query('SELECT role FROM admins WHERE username = $1', [username]);
+    if (target.rows.length === 0) {
+      return res.status(404).json({ error: 'No account found with that username.' });
+    }
+    if (target.rows[0].role === 'admin') {
+      const adminCount = await pool.query("SELECT COUNT(*)::int AS n FROM admins WHERE role = 'admin'");
+      if (adminCount.rows[0].n <= 1) {
+        return res.status(400).json({ error: 'Cannot delete the last remaining admin account.' });
+      }
+    }
+    await pool.query('DELETE FROM admins WHERE username = $1', [username]);
+    res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong deleting the user.' });
+  }
+});
+
 // ============================================================
 // ORGANIZATIONS + STATIONS
 // ============================================================
+
+// Admin-only: the organizations THIS admin has created, most recent first,
+// with a station count so the list screen doesn't need a second round trip
+// per organization. Scoped by created_by rather than shared globally --
+// each admin sees their own cafés, not every organization in the database.
+app.get('/organizations', requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT o.id, o.name, o.configured_at, COUNT(s.id)::int AS station_count
+       FROM organizations o
+       LEFT JOIN stations s ON s.organization_id = o.id
+       WHERE o.created_by = $1
+       GROUP BY o.id, o.name, o.configured_at
+       ORDER BY o.configured_at DESC`,
+      [req.user.sub]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong fetching organizations.' });
+  }
+});
 
 app.post('/organizations', async (req, res) => {
   const { name, stations } = req.body;
@@ -294,8 +344,11 @@ app.post('/organizations', async (req, res) => {
   try {
     await client.query('BEGIN');
     const orgResult = await client.query(
-      'INSERT INTO organizations (name) VALUES ($1) RETURNING id',
-      [name]
+      'INSERT INTO organizations (name, created_by) VALUES ($1, $2) RETURNING id',
+      // req.user is only set when the caller authenticated with a real
+      // login JWT (see requireAuth) -- the legacy x-api-key path has no
+      // associated user, so those organizations are simply unowned.
+      [name, req.user ? req.user.sub : null]
     );
     const organizationId = orgResult.rows[0].id;
 

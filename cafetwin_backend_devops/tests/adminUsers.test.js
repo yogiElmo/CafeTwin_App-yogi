@@ -156,3 +156,108 @@ describe('GET/POST /admin/users (requires a live database)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('DELETE /admin/users/:username (requires a live database)', () => {
+  const adminUsername = `test-del-admin-${Date.now()}`;
+  const adminPassword = 'Sup3rSecret!23';
+  const adminPin = '1357';
+
+  const secondAdminUsername = `test-del-admin2-${Date.now()}`;
+
+  const staffUsername = `test-del-staff-${Date.now()}`;
+  const staffPassword = 'AnotherSecret!45';
+  const staffPin = '2468';
+
+  const usersToCleanUp = [adminUsername, secondAdminUsername, staffUsername];
+
+  let adminToken = null;
+  let staffToken = null;
+
+  beforeAll(async () => {
+    if (!dbUp) return;
+    await pool.query(
+      `INSERT INTO admins (username, password_hash, pin_hash, role)
+       VALUES ($1, $2, $3, 'admin')`,
+      [adminUsername, await bcrypt.hash(adminPassword, 10), await bcrypt.hash(adminPin, 10)]
+    );
+    await pool.query(
+      `INSERT INTO admins (username, password_hash, pin_hash, role)
+       VALUES ($1, $2, $3, 'admin')`,
+      [secondAdminUsername, await bcrypt.hash('Whatever!99', 10), await bcrypt.hash('1111', 10)]
+    );
+    await pool.query(
+      `INSERT INTO admins (username, password_hash, pin_hash, role)
+       VALUES ($1, $2, $3, 'staff')`,
+      [staffUsername, await bcrypt.hash(staffPassword, 10), await bcrypt.hash(staffPin, 10)]
+    );
+
+    const adminLogin = await request(app)
+      .post('/auth/login')
+      .send({ username: adminUsername, password: adminPassword, pin: adminPin });
+    adminToken = adminLogin.body.token;
+
+    const staffLogin = await request(app)
+      .post('/auth/login')
+      .send({ username: staffUsername, password: staffPassword, pin: staffPin });
+    staffToken = staffLogin.body.token;
+  });
+
+  afterAll(async () => {
+    if (!dbUp) return;
+    await pool.query('DELETE FROM admins WHERE username = ANY($1)', [usersToCleanUp]);
+  });
+
+  it('rejects deleting with no token', async () => {
+    if (!dbUp) return;
+    const res = await request(app).delete(`/admin/users/${staffUsername}`);
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a non-admin (staff) deleting anyone', async () => {
+    if (!dbUp) return;
+    const res = await request(app)
+      .delete(`/admin/users/${adminUsername}`)
+      .set('Authorization', `Bearer ${staffToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses to let an admin delete the account they are logged in as', async () => {
+    if (!dbUp) return;
+    const res = await request(app)
+      .delete(`/admin/users/${adminUsername}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('lets an admin delete a different, non-admin account', async () => {
+    if (!dbUp) return;
+    const res = await request(app)
+      .delete(`/admin/users/${staffUsername}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(204);
+  });
+
+  it('refuses to delete the last remaining admin account, even when the ' +
+    'caller is not literally "deleting themselves"', async () => {
+    if (!dbUp) return;
+    // The self-delete guard only catches a token deleting its own username.
+    // This test isolates the separate "last admin" count guard: adminToken
+    // stays structurally valid even after its own row is gone (JWTs aren't
+    // revoked server-side), which is exactly the scenario the count guard
+    // exists for -- a stale-but-valid admin token must not be able to wipe
+    // out the one admin account left standing.
+    await pool.query('DELETE FROM admins WHERE username = $1', [adminUsername]);
+    const res = await request(app)
+      .delete(`/admin/users/${secondAdminUsername}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 for a username that does not exist', async () => {
+    if (!dbUp) return;
+    const res = await request(app)
+      .delete('/admin/users/no-such-user-at-all')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(404);
+  });
+});

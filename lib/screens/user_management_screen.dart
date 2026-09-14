@@ -32,6 +32,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   String? _formError;
   String? _formSuccess;
 
+  /// Username currently being deleted (disables that row's button and
+  /// shows a spinner in place of the delete icon), or null when idle.
+  String? _deletingUsername;
+
   @override
   void initState() {
     super.initState();
@@ -108,6 +112,56 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     }
   }
 
+  Future<void> _confirmAndDelete(AdminAccount account) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        backgroundColor: _surface,
+        title: const Text('Delete account?'),
+        content: Text(
+          'This permanently deletes the login account "${account.username}". '
+          'This cannot be undone.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(
+              'Delete',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _deletingUsername = account.username;
+      _formError = null;
+      _formSuccess = null;
+    });
+
+    final String? error = await AuthService.deleteUser(account.username);
+    if (!mounted) return;
+
+    setState(() {
+      _deletingUsername = null;
+      if (error != null) {
+        _formError = error;
+      } else {
+        _formSuccess = 'Account "${account.username}" deleted.';
+      }
+    });
+
+    if (error == null) {
+      await _refresh();
+    }
+  }
+
   InputDecoration _fieldDecoration(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
@@ -127,6 +181,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
   Widget _userRow(AdminAccount account) {
     final bool isAdmin = account.role == 'admin';
+    final bool isSelf = account.username == AuthService.currentUsername;
+    final bool deleting = _deletingUsername == account.username;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
@@ -139,7 +195,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              account.username,
+              isSelf ? '${account.username} (you)' : account.username,
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
             ),
           ),
@@ -161,6 +217,27 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               ),
             ),
           ),
+          const SizedBox(width: 4),
+          if (deleting)
+            const Padding(
+              padding: EdgeInsets.all(8),
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.delete_outline, size: 20),
+              color: Colors.grey,
+              tooltip: isSelf
+                  ? "You can't delete the account you're logged in as"
+                  : 'Delete account',
+              onPressed: isSelf || _deletingUsername != null
+                  ? null
+                  : () => _confirmAndDelete(account),
+            ),
         ],
       ),
     );

@@ -4,6 +4,7 @@ import '../models/station.dart';
 import '../services/auth_service.dart';
 import '../state/cafe_state.dart';
 import '../widgets/monitor_illustration.dart';
+import 'organization_list_screen.dart';
 import 'setup_screen.dart';
 
 /// Onboarding page 1: admin login.
@@ -42,14 +43,14 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   /// If a previously-issued token is still stored (e.g. the app was
-  /// relaunched), skip straight to setup instead of asking for
-  /// credentials again. An expired token simply fails on first use,
+  /// relaunched), skip straight to setup/organizations instead of asking
+  /// for credentials again. An expired token simply fails on first use,
   /// which the rest of the app already treats as a best-effort call.
   Future<void> _tryRestoreSession() async {
     final bool restored = await AuthService.restoreSession();
     if (!mounted) return;
     if (restored) {
-      _goToSetup();
+      _goToNextScreen();
       return;
     }
     setState(() => _checkingSession = false);
@@ -63,10 +64,15 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _goToSetup() {
+  /// Admins land on [OrganizationListScreen] (their own organizations,
+  /// plus the option to set up a new one); staff go straight to
+  /// [SetupScreen], same as every login before this screen existed.
+  void _goToNextScreen() {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (BuildContext context) => SetupScreen(state: widget.state),
+        builder: (BuildContext context) => AuthService.isAdmin
+            ? OrganizationListScreen(state: widget.state)
+            : SetupScreen(state: widget.state),
       ),
     );
   }
@@ -90,7 +96,7 @@ class _LoginScreenState extends State<LoginScreen> {
       });
       return;
     }
-    _goToSetup();
+    _goToNextScreen();
   }
 
   InputDecoration _fieldDecoration(String label, IconData icon) {

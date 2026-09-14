@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/admin_account.dart';
+import '../models/organization_summary.dart';
 import 'api_service.dart';
 
 /// Handles admin login against the CaféTwin backend and stores the
@@ -34,12 +35,18 @@ class AuthService {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
   static const String _tokenKey = 'cafetwin_jwt';
   static const String _roleKey = 'cafetwin_role';
+  static const String _usernameKey = 'cafetwin_username';
 
   /// Role of the currently logged-in user (`'admin'` or `'staff'`), kept in
   /// memory once set by [login]/[restoreSession] so UI code (e.g.
   /// [HomeShell]'s "Manage Users" action) can check it synchronously without
   /// an async storage read on every rebuild.
   static String? _currentRole;
+
+  /// Username of the currently logged-in user, kept the same way as
+  /// [_currentRole]. Used to disable "delete this account" for whichever
+  /// account you're currently logged in as, in [UserManagementScreen].
+  static String? _currentUsername;
 
   /// True when a demo (offline, no-backend) fallback login is configured.
   static bool get hasDemoFallback =>
@@ -50,6 +57,10 @@ class AuthService {
   /// Role of the currently logged-in user, or null if nobody is logged in
   /// yet (before the first successful [login]/[restoreSession]).
   static String? get currentRole => _currentRole;
+
+  /// Username of the currently logged-in user, or null if nobody is logged
+  /// in yet.
+  static String? get currentUsername => _currentUsername;
 
   /// True when the currently logged-in user is an admin. Demo-fallback
   /// logins (no backend configured) are always treated as admin, since
@@ -98,10 +109,13 @@ class AuthService {
           return 'Login succeeded but the server did not return a token.';
         }
         final String role = body['role'] as String? ?? 'admin';
+        final String loggedInUsername = body['username'] as String? ?? username;
         await _storage.write(key: _tokenKey, value: token);
         await _storage.write(key: _roleKey, value: role);
+        await _storage.write(key: _usernameKey, value: loggedInUsername);
         ApiService.setAuthToken(token);
         _currentRole = role;
+        _currentUsername = loggedInUsername;
         return null;
       }
       if (resp.statusCode == 401) {
@@ -135,6 +149,7 @@ class AuthService {
     if (ok) {
       // No backend, so no real role -- treat the one demo account as admin.
       _currentRole = 'admin';
+      _currentUsername = username;
     }
     return ok ? null : 'Invalid username, password or PIN.';
   }
@@ -156,15 +171,100 @@ class AuthService {
     }
     ApiService.setAuthToken(token);
     _currentRole = await _storage.read(key: _roleKey) ?? 'admin';
+    _currentUsername = await _storage.read(key: _usernameKey);
     return true;
   }
 
-  /// Clears the stored token and role (logout).
+  /// Clears the stored token, role and username (logout).
   static Future<void> logout() async {
     await _storage.delete(key: _tokenKey);
     await _storage.delete(key: _roleKey);
+    await _storage.delete(key: _usernameKey);
     ApiService.setAuthToken(null);
     _currentRole = null;
+    _currentUsername = null;
+  }
+
+  /// Lists organizations the currently logged-in admin has created.
+  /// Admin-only on the backend -- returns null (rather than throwing) if
+  /// unreachable, disabled, or the caller isn't an admin, since this is
+  /// used to populate [OrganizationListScreen] rather than gate access
+  /// itself (the backend is the real enforcement point).
+  static Future<List<OrganizationSummary>?> listMyOrganizations() async {
+    if (!ApiService.isEnabled) return null;
+    try {
+      final http.Response resp = await http
+          .get(
+            Uri.parse('${ApiService.baseUrl}/organizations'),
+            headers: ApiService.authHeaders,
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        final List<dynamic> body = jsonDecode(resp.body) as List<dynamic>;
+        return body
+            .map((dynamic e) =>
+                OrganizationSummary.fromJson(e as Map<String, dynamic>))
+            .toList();
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Fetches one organization's full detail (name + station roster) so
+  /// [OrganizationListScreen] can hand it to [CafeState.loadExisting].
+  /// This route doesn't require auth on the backend, but a failure here
+  /// still needs to be visible to the caller (unlike [ApiService]'s
+  /// fire-and-forget calls), so it lives here rather than there.
+  static Future<Map<String, dynamic>?> getOrganization(String id) async {
+    if (!ApiService.isEnabled) return null;
+    try {
+      final http.Response resp = await http
+          .get(Uri.parse('${ApiService.baseUrl}/organizations/$id'))
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        return jsonDecode(resp.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Deletes a login account. Returns null on success, or a short
+  /// user-facing error message on failure (not authorized, self-delete,
+  /// last-admin, not found, or the backend being unreachable).
+  static Future<String?> deleteUser(String username) async {
+    if (!ApiService.isEnabled) {
+      return 'No backend is configured (API_BASE_URL not set).';
+    }
+    try {
+      final http.Response resp = await http
+          .delete(
+            Uri.parse('${ApiService.baseUrl}/admin/users/$username'),
+            headers: ApiService.authHeaders,
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 204) {
+        return null;
+      }
+      if (resp.statusCode == 400 || resp.statusCode == 404) {
+        try {
+          final Map<String, dynamic> body =
+              jsonDecode(resp.body) as Map<String, dynamic>;
+          return body['error'] as String? ?? 'Could not delete that account.';
+        } catch (_) {
+          return 'Could not delete that account.';
+        }
+      }
+      if (resp.statusCode == 403) {
+        return 'Only an admin can delete accounts.';
+      }
+      return 'Failed to delete user (server responded with ${resp.statusCode}).';
+    } catch (e) {
+      return 'Could not reach the backend at ${ApiService.baseUrl}.';
+    }
   }
 
   /// Lists existing login accounts. Admin-only on the backend -- returns
