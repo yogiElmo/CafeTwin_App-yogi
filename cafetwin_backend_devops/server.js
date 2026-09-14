@@ -82,6 +82,31 @@ app.use((req, res, next) => {
   next();
 });
 
+// Role-gated middleware for admin-only endpoints (e.g. user management).
+// Unlike requireAuth above -- which accepts either a real login JWT or the
+// legacy x-api-key shared secret for service callers -- this requires a
+// genuine Bearer JWT specifically. A service-account x-api-key has no
+// associated user or role, so it can never satisfy a role check.
+function requireRole(role) {
+  return (req, res, next) => {
+    const authHeader = req.get('authorization') || '';
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'This endpoint requires a Bearer token from a logged-in user.' });
+    }
+    let decoded;
+    try {
+      decoded = jwt.verify(authHeader.slice(7), JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid or expired token.' });
+    }
+    if (decoded.role !== role) {
+      return res.status(403).json({ error: `This action requires the "${role}" role.` });
+    }
+    req.user = decoded;
+    next();
+  };
+}
+
 // --- Database ------------------------------------------------------------
 // Reads PG* env vars (set by docker-compose.yml / Render / Railway); falls
 // back to local defaults so `node server.js` still works with zero setup.
@@ -205,6 +230,53 @@ app.get('/admin/bootstrap', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Bootstrap failed.', detail: err.message });
+  }
+});
+
+// ============================================================
+// ADMIN USER MANAGEMENT (multi-user accounts / roles)
+// ============================================================
+// Both routes require a real logged-in admin (a Bearer JWT with
+// role === 'admin') -- the legacy x-api-key never satisfies this, by
+// design, since granting user-management power to a shared service
+// secret would defeat the point of having per-person accounts at all.
+
+app.get('/admin/users', requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT username, role, created_at FROM admins ORDER BY created_at ASC'
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong fetching users.' });
+  }
+});
+
+app.post('/admin/users', requireRole('admin'), async (req, res) => {
+  const { username, password, pin, role = 'staff' } = req.body;
+  if (!username || !password || !pin) {
+    return res.status(400).json({ error: 'Request must include "username", "password" and "pin".' });
+  }
+  if (!['admin', 'staff'].includes(role)) {
+    return res.status(400).json({ error: '"role" must be "admin" or "staff".' });
+  }
+  try {
+    const passwordHash = await bcrypt.hash(password, 12);
+    const pinHash = await bcrypt.hash(pin, 12);
+    const result = await pool.query(
+      `INSERT INTO admins (username, password_hash, pin_hash, role)
+       VALUES ($1, $2, $3, $4)
+       RETURNING username, role, created_at`,
+      [username, passwordHash, pinHash, role]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'That username is already taken.' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong creating the user.' });
   }
 });
 

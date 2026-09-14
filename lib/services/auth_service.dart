@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
+import '../models/admin_account.dart';
 import 'api_service.dart';
 
 /// Handles admin login against the CaféTwin backend and stores the
@@ -32,12 +33,28 @@ class AuthService {
 
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
   static const String _tokenKey = 'cafetwin_jwt';
+  static const String _roleKey = 'cafetwin_role';
+
+  /// Role of the currently logged-in user (`'admin'` or `'staff'`), kept in
+  /// memory once set by [login]/[restoreSession] so UI code (e.g.
+  /// [HomeShell]'s "Manage Users" action) can check it synchronously without
+  /// an async storage read on every rebuild.
+  static String? _currentRole;
 
   /// True when a demo (offline, no-backend) fallback login is configured.
   static bool get hasDemoFallback =>
       _demoUsername.isNotEmpty &&
       _demoPassword.isNotEmpty &&
       _demoPin.isNotEmpty;
+
+  /// Role of the currently logged-in user, or null if nobody is logged in
+  /// yet (before the first successful [login]/[restoreSession]).
+  static String? get currentRole => _currentRole;
+
+  /// True when the currently logged-in user is an admin. Demo-fallback
+  /// logins (no backend configured) are always treated as admin, since
+  /// there is no real account/role behind them.
+  static bool get isAdmin => _currentRole == 'admin';
 
   /// Attempts to log in with the given credentials.
   ///
@@ -80,8 +97,11 @@ class AuthService {
         if (token == null) {
           return 'Login succeeded but the server did not return a token.';
         }
+        final String role = body['role'] as String? ?? 'admin';
         await _storage.write(key: _tokenKey, value: token);
+        await _storage.write(key: _roleKey, value: role);
         ApiService.setAuthToken(token);
+        _currentRole = role;
         return null;
       }
       if (resp.statusCode == 401) {
@@ -112,6 +132,10 @@ class AuthService {
     final bool ok = username == _demoUsername &&
         password == _demoPassword &&
         pin == _demoPin;
+    if (ok) {
+      // No backend, so no real role -- treat the one demo account as admin.
+      _currentRole = 'admin';
+    }
     return ok ? null : 'Invalid username, password or PIN.';
   }
 
@@ -131,12 +155,89 @@ class AuthService {
       return false;
     }
     ApiService.setAuthToken(token);
+    _currentRole = await _storage.read(key: _roleKey) ?? 'admin';
     return true;
   }
 
-  /// Clears the stored token (logout).
+  /// Clears the stored token and role (logout).
   static Future<void> logout() async {
     await _storage.delete(key: _tokenKey);
+    await _storage.delete(key: _roleKey);
     ApiService.setAuthToken(null);
+    _currentRole = null;
+  }
+
+  /// Lists existing login accounts. Admin-only on the backend -- returns
+  /// null (rather than throwing) if unreachable, disabled, or the caller
+  /// isn't an admin, since this is used to populate a UI list rather than
+  /// gate access itself (the backend is the real enforcement point).
+  static Future<List<AdminAccount>?> listUsers() async {
+    if (!ApiService.isEnabled) return null;
+    try {
+      final http.Response resp = await http
+          .get(
+            Uri.parse('${ApiService.baseUrl}/admin/users'),
+            headers: ApiService.authHeaders,
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        final List<dynamic> body = jsonDecode(resp.body) as List<dynamic>;
+        return body
+            .map((dynamic e) => AdminAccount.fromJson(e as Map<String, dynamic>))
+            .toList();
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Creates a new login account. Returns null on success, or a short
+  /// user-facing error message on failure (bad input, duplicate username,
+  /// not authorized, or the backend being unreachable).
+  static Future<String?> createUser({
+    required String username,
+    required String password,
+    required String pin,
+    required String role,
+  }) async {
+    if (!ApiService.isEnabled) {
+      return 'No backend is configured (API_BASE_URL not set).';
+    }
+    try {
+      final http.Response resp = await http
+          .post(
+            Uri.parse('${ApiService.baseUrl}/admin/users'),
+            headers: ApiService.authHeaders,
+            body: jsonEncode(<String, String>{
+              'username': username,
+              'password': password,
+              'pin': pin,
+              'role': role,
+            }),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 201) {
+        return null;
+      }
+      if (resp.statusCode == 409) {
+        return 'That username is already taken.';
+      }
+      if (resp.statusCode == 403) {
+        return 'Only an admin can create new accounts.';
+      }
+      if (resp.statusCode == 400) {
+        try {
+          final Map<String, dynamic> body =
+              jsonDecode(resp.body) as Map<String, dynamic>;
+          return body['error'] as String? ?? 'Invalid request.';
+        } catch (_) {
+          return 'Invalid request.';
+        }
+      }
+      return 'Failed to create user (server responded with ${resp.statusCode}).';
+    } catch (e) {
+      return 'Could not reach the backend at ${ApiService.baseUrl}.';
+    }
   }
 }

@@ -55,6 +55,12 @@ class ApiService {
         if (_authToken == null && _apiKey.isNotEmpty) 'x-api-key': _apiKey,
       };
 
+  /// Same headers used for every fire-and-forget call in this class,
+  /// exposed so [AuthService] can call admin-only endpoints (which need
+  /// real success/error surfacing, unlike everything else here) without
+  /// duplicating the auth-header logic.
+  static Map<String, String> get authHeaders => _headers;
+
   static Uri _uri(String path) => Uri.parse('$_baseUrl$path');
 
   /// Registers the organization + station roster with the backend.
