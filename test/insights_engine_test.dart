@@ -10,9 +10,14 @@ import 'package:flutter_test/flutter_test.dart';
 /// immediately pauses the simulation timer, so the returned twins can be
 /// mutated deterministically in each test without a background tick racing
 /// in and changing hardware/session state mid-assertion.
-CafeState _configuredState(List<String> categories) {
+Future<CafeState> _configuredState(List<String> categories) async {
   final CafeState state = CafeState();
-  state.configure('Test Café', categories);
+  // configure() is async (it awaits an organization-registration attempt
+  // before building the local stations -- see CafeState.configure's docs);
+  // with no API_BASE_URL configured for the test binary, that resolves to
+  // null on its very first synchronous check, so this still completes
+  // effectively immediately.
+  await state.configure('Test Café', categories);
   state.pauseSimulation();
   return state;
 }
@@ -20,9 +25,9 @@ CafeState _configuredState(List<String> categories) {
 void main() {
   group('InsightsEngine.optimizationsFor', () {
     test('recommends powering down idle stations with a quantified saving',
-        () {
+        () async {
       final CafeState state =
-          _configuredState(<String>['Gaming', 'Gaming', 'Gaming', 'Gaming']);
+          await _configuredState(<String>['Gaming', 'Gaming', 'Gaming', 'Gaming']);
       // All 4 stations start unoccupied (SessionInfo.empty) -> all idle.
       final List<Insight> powerDown = InsightsEngine.optimizationsFor(state)
           .where((Insight i) => i.title.startsWith('Power down'))
@@ -33,8 +38,8 @@ void main() {
       expect(powerDown.first.impact, '\$1.73/day');
     });
 
-    test('flags low utilization once occupancy drops below 40%', () {
-      final CafeState state = _configuredState(
+    test('flags low utilization once occupancy drops below 40%', () async {
+      final CafeState state = await _configuredState(
           <String>['Gaming', 'Gaming', 'Gaming', 'Gaming', 'Gaming']);
       state.stationList.first.updateSession(const SessionInfo(
           occupied: true, sessionMinutes: 5, game: 'Valor Rush'));
@@ -49,8 +54,8 @@ void main() {
 
   group('InsightsEngine.predictionsFor', () {
     test('forecasts a time-to-85C for a station heating up below the limit',
-        () {
-      final CafeState state = _configuredState(<String>['Gaming']);
+        () async {
+      final CafeState state = await _configuredState(<String>['Gaming']);
       final StationTwin twin = state.stationList.first;
       for (int i = 0; i < 10; i++) {
         final double temp = 60 + i * 2.5; // 60 -> 82.5C, slope 2.5C/min.
@@ -67,8 +72,9 @@ void main() {
       expect(thermal.first.title, contains('85'));
     });
 
-    test('has no thermal prediction for a station that is cool and flat', () {
-      final CafeState state = _configuredState(<String>['Gaming']);
+    test('has no thermal prediction for a station that is cool and flat',
+        () async {
+      final CafeState state = await _configuredState(<String>['Gaming']);
       final StationTwin twin = state.stationList.first;
       // Default hardware (40C, never updated) -> cpuTempTrend() is exactly 0.
       for (int i = 0; i < 5; i++) {

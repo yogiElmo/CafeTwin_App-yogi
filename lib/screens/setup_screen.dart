@@ -58,6 +58,7 @@ class _SetupScreenState extends State<SetupScreen> {
       List<String>.filled(SetupScreen.maxStations, 'Gaming');
 
   String? _error;
+  bool _launching = false;
 
   @override
   void dispose() {
@@ -79,7 +80,8 @@ class _SetupScreenState extends State<SetupScreen> {
     _customCategoryController.clear();
   }
 
-  void _launch() {
+  Future<void> _launch() async {
+    if (_launching) return;
     final String company = _companyController.text.trim();
     if (company.isEmpty) {
       setState(() {
@@ -95,7 +97,17 @@ class _SetupScreenState extends State<SetupScreen> {
       });
       return;
     }
-    widget.state.configure(company, assignments);
+    setState(() {
+      _launching = true;
+      _error = null;
+    });
+    // configure() registers with the backend (when configured) before
+    // building the local stations, so it must be awaited here rather than
+    // fired-and-forgotten -- see CafeState.configure's docs. It still
+    // resolves quickly offline/unreachable (ApiService's own 5s timeout),
+    // so this spinner is brief in the common case.
+    await widget.state.configure(company, assignments);
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (BuildContext context) => HomeShell(state: widget.state),
@@ -315,7 +327,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   ],
                   const SizedBox(height: 24),
                   ElevatedButton(
-                    onPressed: _launch,
+                    onPressed: _launching ? null : _launch,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _amber,
                       foregroundColor: const Color(0xFF1E1B18),
@@ -328,7 +340,16 @@ class _SetupScreenState extends State<SetupScreen> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    child: const Text('Launch Dashboard'),
+                    child: _launching
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.4,
+                              color: Color(0xFF1E1B18),
+                            ),
+                          )
+                        : const Text('Launch Dashboard'),
                   ),
                 ],
               ),

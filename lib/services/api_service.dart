@@ -64,8 +64,18 @@ class ApiService {
   static Uri _uri(String path) => Uri.parse('$_baseUrl$path');
 
   /// Registers the organization + station roster with the backend.
-  /// Returns the backend's organizationId, or null if disabled/unreachable.
-  static Future<String?> createOrganization({
+  /// Returns the backend's full response -- `{organizationId, name,
+  /// stations: [{id, name, category}, ...]}` -- or null if
+  /// disabled/unreachable.
+  ///
+  /// Callers should build their local station twins from the returned
+  /// `stations` list (real backend ids) rather than generating ids
+  /// locally: earlier versions of this app generated local ids like
+  /// `ST-01` independently of whatever id the backend actually assigned
+  /// (e.g. `ST-<org>-01`), so every telemetry/alert post afterwards
+  /// silently failed a foreign-key check server-side. See
+  /// [CafeState.configure] for the fixed, awaited call site.
+  static Future<Map<String, dynamic>?> createOrganization({
     required String name,
     required List<String> stationCategories,
   }) async {
@@ -84,9 +94,7 @@ class ApiService {
           )
           .timeout(const Duration(seconds: 5));
       if (resp.statusCode == 201) {
-        final Map<String, dynamic> body =
-            jsonDecode(resp.body) as Map<String, dynamic>;
-        return body['organizationId'] as String?;
+        return jsonDecode(resp.body) as Map<String, dynamic>;
       }
       _logFailure('createOrganization', resp);
     } catch (e) {

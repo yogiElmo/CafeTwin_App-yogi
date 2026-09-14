@@ -72,33 +72,52 @@ class CafeState extends ChangeNotifier {
   /// Builds the station twins + simulation engine from the organization
   /// setup form and starts the simulation. Safe to call only once; later
   /// calls are ignored so the engine's timer can never be started twice.
-  void configure(String company, List<String> categoriesPerStation) {
+  ///
+  /// Registers with the backend FIRST (when `API_BASE_URL` is configured)
+  /// and, on success, builds the station twins from the backend's own
+  /// response instead of generating ids locally -- otherwise the local
+  /// twins (previously always `ST-01`, `ST-02`, ...) and the rows the
+  /// backend actually created (e.g. `ST-<org>-01`) never matched, so
+  /// every telemetry/alert post for a freshly-created organization was
+  /// silently failing a foreign-key check server-side the whole time.
+  /// [ApiService.createOrganization] still never throws and still returns
+  /// null on any failure/timeout (5s), so offline/unreachable behaves
+  /// exactly as before: falls straight through to locally-generated ids
+  /// and the simulation starts immediately either way.
+  Future<void> configure(
+    String company,
+    List<String> categoriesPerStation,
+  ) async {
     if (_isConfigured) {
       return;
     }
-    final List<Station> stations = List<Station>.generate(
-      categoriesPerStation.length,
-      (int i) => Station.fromConfig(i, categoriesPerStation[i]),
+
+    final Map<String, dynamic>? registration = await ApiService.createOrganization(
+      name: company,
+      stationCategories: categoriesPerStation,
     );
+
+    List<Station> stations;
+    if (registration != null) {
+      final List<dynamic> stationsJson =
+          registration['stations'] as List<dynamic>? ?? <dynamic>[];
+      stations = stationsJson
+          .map((dynamic s) => Station.fromJson(s as Map<String, dynamic>))
+          .toList();
+      _backendOrgId = registration['organizationId'] as String?;
+    } else {
+      stations = List<Station>.generate(
+        categoriesPerStation.length,
+        (int i) => Station.fromConfig(i, categoriesPerStation[i]),
+      );
+    }
+
     _initSimulation(stations);
     _companyName = company;
     _configuredAt = DateTime.now();
     _isConfigured = true;
     _engine!.start();
     notifyListeners();
-
-    // Best-effort, non-blocking: registers this run with the backend if
-    // API_BASE_URL was configured at build/run time. Never delays the UI
-    // and never throws — see ApiService docs.
-    ApiService.createOrganization(
-      name: company,
-      stationCategories: categoriesPerStation,
-    ).then((String? orgId) {
-      if (orgId != null) {
-        _backendOrgId = orgId;
-        notifyListeners();
-      }
-    });
   }
 
   /// Loads a previously-created organization (as returned by
