@@ -13,9 +13,9 @@ import 'user_management_screen.dart';
 /// The Alerts tab carries a red badge with the unacknowledged alert count.
 ///
 /// The AppBar also carries an admin-only "Manage Users" action, an
-/// admin-only "Leave Organization" action, and a logout button.
+/// admin-only "Log Off Organization" action, and a logout button.
 ///
-/// "Leave Organization" is distinct from "Logout": it stays signed in to
+/// "Log Off Organization" is distinct from "Logout": it stays signed in to
 /// the same admin account but returns to [OrganizationListScreen] so a
 /// different organization can be picked (or the current one deleted from
 /// that list). It calls [CafeState.reset] first, since [CafeState] is
@@ -89,7 +89,7 @@ class _HomeShellState extends State<HomeShell> {
               if (AuthService.isAdmin)
                 IconButton(
                   icon: const Icon(Icons.swap_horiz),
-                  tooltip: 'Leave Organization',
+                  tooltip: 'Log Off Organization',
                   onPressed: _leaveOrganization,
                 ),
               IconButton(

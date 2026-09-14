@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -206,8 +207,18 @@ class AuthService {
                 OrganizationSummary.fromJson(e as Map<String, dynamic>))
             .toList();
       }
+      // Not shown in the UI (which just says "check the backend connection")
+      // but visible in the browser/device console -- a 500 here almost
+      // always means the database schema is out of date (e.g. a column
+      // `/admin/bootstrap` was meant to add hasn't been applied yet on the
+      // deployed Postgres instance), while a 401/403 points at auth instead.
+      developer.log(
+        'GET /organizations failed: ${resp.statusCode} ${resp.body}',
+        name: 'AuthService',
+      );
       return null;
     } catch (e) {
+      developer.log('GET /organizations threw: $e', name: 'AuthService');
       return null;
     }
   }
@@ -226,8 +237,13 @@ class AuthService {
       if (resp.statusCode == 200) {
         return jsonDecode(resp.body) as Map<String, dynamic>;
       }
+      developer.log(
+        'GET /organizations/$id failed: ${resp.statusCode} ${resp.body}',
+        name: 'AuthService',
+      );
       return null;
     } catch (e) {
+      developer.log('GET /organizations/$id threw: $e', name: 'AuthService');
       return null;
     }
   }
