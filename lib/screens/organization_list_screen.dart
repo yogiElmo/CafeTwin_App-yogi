@@ -16,10 +16,12 @@ import 'setup_screen.dart';
 /// Non-admin (staff) logins skip this screen entirely and go straight to
 /// [SetupScreen], same as before this screen existed -- see [LoginScreen].
 ///
-/// Every navigation out of this screen uses `pushReplacement`: [CafeState]
-/// is a one-shot object (safe to configure/load only once), so there's no
-/// way to come back here and pick a different organization within the same
-/// session -- logging out and back in returns you to a fresh list.
+/// Every navigation out of this screen uses `pushReplacement`. Opening or
+/// creating an organization is otherwise one-shot per [CafeState] instance
+/// (safe to configure/load only once) -- [HomeShell]'s "Leave Organization"
+/// action is what makes it safe to land back on a fresh copy of this
+/// screen afterwards: it calls [CafeState.reset] first, so picking a
+/// different organization next actually takes effect.
 class OrganizationListScreen extends StatefulWidget {
   const OrganizationListScreen({super.key, required this.state});
 
@@ -44,6 +46,11 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
   /// card can be disabled while that's in flight.
   String? _openingId;
   String? _openError;
+
+  /// Id of the organization currently being deleted, so just that card's
+  /// delete icon can turn into a spinner while the request is in flight.
+  String? _deletingId;
+  String? _deleteError;
 
   @override
   void initState() {
@@ -105,6 +112,53 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
     );
   }
 
+  Future<void> _confirmAndDelete(OrganizationSummary org) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        backgroundColor: _surface,
+        title: const Text('Delete organization?'),
+        content: Text(
+          'This permanently deletes "${org.name}" and all of its stations, '
+          'telemetry and alert history. This cannot be undone.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(
+              'Delete',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _deletingId = org.id;
+      _deleteError = null;
+    });
+
+    final String? error = await AuthService.deleteOrganization(org.id);
+    if (!mounted) return;
+
+    setState(() {
+      _deletingId = null;
+      if (error != null) {
+        _deleteError = error;
+      }
+    });
+
+    if (error == null) {
+      await _refresh();
+    }
+  }
+
   void _createNew() {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
@@ -123,7 +177,8 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
 
   Widget _organizationCard(OrganizationSummary org) {
     final bool opening = _openingId == org.id;
-    final bool disabled = _openingId != null;
+    final bool deleting = _deletingId == org.id;
+    final bool disabled = _openingId != null || _deletingId != null;
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       shape: RoundedRectangleBorder(
@@ -135,9 +190,10 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
         borderRadius: BorderRadius.circular(12),
         onTap: disabled ? null : () => _openOrganization(org),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           child: Row(
             children: <Widget>[
+              const SizedBox(width: 8),
               const Icon(Icons.business, color: _amber, size: 22),
               const SizedBox(width: 14),
               Expanded(
@@ -159,13 +215,32 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
                 ),
               ),
               if (opening)
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
                 )
               else
                 const Icon(Icons.chevron_right, color: Colors.grey),
+              if (deleting)
+                const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              else
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  color: Colors.grey,
+                  tooltip: 'Delete organization',
+                  onPressed: disabled ? null : () => _confirmAndDelete(org),
+                ),
             ],
           ),
         ),
@@ -228,6 +303,16 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
                     const SizedBox(height: 8),
                     Text(
                       _openError!,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ],
+                  if (_deleteError != null) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Text(
+                      _deleteError!,
                       style: TextStyle(
                         fontSize: 13,
                         color: Theme.of(context).colorScheme.error,

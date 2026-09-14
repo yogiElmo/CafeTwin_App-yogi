@@ -398,6 +398,30 @@ app.get('/organizations/:id', async (req, res) => {
   }
 });
 
+// Admin-only, and further scoped to the organization's own creator: an
+// admin can delete organizations they created, but not another admin's.
+// 404 (not 403) for "exists but isn't yours" -- same "as far as you're
+// concerned it doesn't exist" reasoning as everywhere else here that
+// scopes by created_by. Cascades to that organization's stations,
+// telemetry, alerts, sessions and report_entries via each table's
+// existing ON DELETE CASCADE -- no separate cleanup needed here.
+app.delete('/organizations/:id', requireRole('admin'), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      'DELETE FROM organizations WHERE id = $1 AND created_by = $2 RETURNING id',
+      [id, req.user.sub]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Organization not found.' });
+    }
+    res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong deleting the organization.' });
+  }
+});
+
 // ============================================================
 // TELEMETRY
 // ============================================================

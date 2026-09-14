@@ -4,6 +4,7 @@ import '../services/auth_service.dart';
 import '../state/cafe_state.dart';
 import 'alerts_screen.dart';
 import 'login_screen.dart';
+import 'organization_list_screen.dart';
 import 'simulation_screen.dart';
 import 'station_grid_screen.dart';
 import 'user_management_screen.dart';
@@ -11,8 +12,16 @@ import 'user_management_screen.dart';
 /// Root scaffold: AppBar + BottomNavigationBar (Stations | Simulation | Alerts).
 /// The Alerts tab carries a red badge with the unacknowledged alert count.
 ///
-/// The AppBar also carries an admin-only "Manage Users" action and a
-/// logout button -- logging out clears the stored session and returns to
+/// The AppBar also carries an admin-only "Manage Users" action, an
+/// admin-only "Leave Organization" action, and a logout button.
+///
+/// "Leave Organization" is distinct from "Logout": it stays signed in to
+/// the same admin account but returns to [OrganizationListScreen] so a
+/// different organization can be picked (or the current one deleted from
+/// that list). It calls [CafeState.reset] first, since [CafeState] is
+/// otherwise safe to configure/load only once per instance.
+///
+/// "Logout" clears the stored session entirely and returns to
 /// [LoginScreen], but does not reset [CafeState] (organization setup is
 /// purely in-memory for this browser session; see the README's note on
 /// what "multi-user" means here).
@@ -47,6 +56,16 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  void _leaveOrganization() {
+    widget.state.reset();
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) =>
+            OrganizationListScreen(state: widget.state),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -66,6 +85,12 @@ class _HomeShellState extends State<HomeShell> {
                   icon: const Icon(Icons.manage_accounts_outlined),
                   tooltip: 'Manage Users',
                   onPressed: _openUserManagement,
+                ),
+              if (AuthService.isAdmin)
+                IconButton(
+                  icon: const Icon(Icons.swap_horiz),
+                  tooltip: 'Leave Organization',
+                  onPressed: _leaveOrganization,
                 ),
               IconButton(
                 icon: const Icon(Icons.logout),

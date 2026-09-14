@@ -152,6 +152,31 @@ class CafeState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Tears down the current organization's simulation (stopping its timer)
+  /// and clears every bit of state [configure]/[loadExisting] set, so
+  /// either can be called again afterwards -- both are otherwise one-shot,
+  /// guarded by [_isConfigured].
+  ///
+  /// Used by [HomeShell]'s "Leave Organization" action: an admin steps
+  /// back out to [OrganizationListScreen] without logging out of their
+  /// account, and this is what makes picking a *different* organization
+  /// next actually take effect instead of silently no-op'ing.
+  void reset() {
+    _engine?.dispose();
+    _engine = null;
+    _twins = <StationTwin>[];
+    _alerts.clear();
+    _eventLog.clear();
+    _records.clear();
+    _recordSeq = 0;
+    _tickCount = 0;
+    _isConfigured = false;
+    _companyName = '';
+    _configuredAt = null;
+    _backendOrgId = null;
+    notifyListeners();
+  }
+
   /// Shared twin/engine creation used by [configure] (mirrors what the
   /// constructor used to do, minus starting the engine).
   void _initSimulation(List<Station> stations) {

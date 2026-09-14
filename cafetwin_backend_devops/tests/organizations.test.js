@@ -129,3 +129,117 @@ describe('GET /organizations (requires a live database)', () => {
     expect(names).toEqual([orgNamesToCleanUp[2]]);
   });
 });
+
+describe('DELETE /organizations/:id (requires a live database)', () => {
+  const ownerUsername = `test-org-del-owner-${Date.now()}`;
+  const ownerPassword = 'Sup3rSecret!23';
+  const ownerPin = '5566';
+
+  const otherAdminUsername = `test-org-del-other-${Date.now()}`;
+  const otherAdminPassword = 'AnotherSecret!45';
+  const otherAdminPin = '7788';
+
+  const usersToCleanUp = [ownerUsername, otherAdminUsername];
+  const orgNameToKeep = `Owner Org To Keep ${Date.now()}`;
+  const orgNameToDelete = `Owner Org To Delete ${Date.now()}`;
+
+  let ownerToken = null;
+  let otherAdminToken = null;
+  let orgIdToDelete = null;
+  let orgIdToKeep = null;
+
+  beforeAll(async () => {
+    if (!dbUp) return;
+    await pool.query(
+      `INSERT INTO admins (username, password_hash, pin_hash, role)
+       VALUES ($1, $2, $3, 'admin')`,
+      [ownerUsername, await bcrypt.hash(ownerPassword, 10), await bcrypt.hash(ownerPin, 10)]
+    );
+    await pool.query(
+      `INSERT INTO admins (username, password_hash, pin_hash, role)
+       VALUES ($1, $2, $3, 'admin')`,
+      [otherAdminUsername, await bcrypt.hash(otherAdminPassword, 10), await bcrypt.hash(otherAdminPin, 10)]
+    );
+
+    const ownerLogin = await request(app)
+      .post('/auth/login')
+      .send({ username: ownerUsername, password: ownerPassword, pin: ownerPin });
+    ownerToken = ownerLogin.body.token;
+
+    const otherLogin = await request(app)
+      .post('/auth/login')
+      .send({ username: otherAdminUsername, password: otherAdminPassword, pin: otherAdminPin });
+    otherAdminToken = otherLogin.body.token;
+
+    const createToDelete = await request(app)
+      .post('/organizations')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ name: orgNameToDelete, stations: [{ category: 'Gaming' }] });
+    orgIdToDelete = createToDelete.body.organizationId;
+
+    const createToKeep = await request(app)
+      .post('/organizations')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ name: orgNameToKeep, stations: [{ category: 'Gaming' }] });
+    orgIdToKeep = createToKeep.body.organizationId;
+  });
+
+  afterAll(async () => {
+    if (!dbUp) return;
+    await pool.query('DELETE FROM organizations WHERE name = ANY($1)', [
+      [orgNameToDelete, orgNameToKeep],
+    ]);
+    await pool.query('DELETE FROM admins WHERE username = ANY($1)', [usersToCleanUp]);
+  });
+
+  it('rejects deleting with no token', async () => {
+    if (!dbUp) return;
+    const res = await request(app).delete(`/organizations/${orgIdToDelete}`);
+    expect(res.status).toBe(401);
+  });
+
+  it("refuses to delete another admin's organization (404, not leaked as 403)", async () => {
+    if (!dbUp) return;
+    const res = await request(app)
+      .delete(`/organizations/${orgIdToDelete}`)
+      .set('Authorization', `Bearer ${otherAdminToken}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('lets the owning admin delete their own organization, cascading its stations', async () => {
+    if (!dbUp) return;
+    const res = await request(app)
+      .delete(`/organizations/${orgIdToDelete}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(res.status).toBe(204);
+
+    const stationsLeft = await pool.query(
+      'SELECT COUNT(*)::int AS n FROM stations WHERE organization_id = $1',
+      [orgIdToDelete]
+    );
+    expect(stationsLeft.rows[0].n).toBe(0);
+
+    const listRes = await request(app)
+      .get('/organizations')
+      .set('Authorization', `Bearer ${ownerToken}`);
+    const names = listRes.body.map((o) => o.name);
+    expect(names).not.toContain(orgNameToDelete);
+    expect(names).toContain(orgNameToKeep);
+  });
+
+  it('returns 404 for an id that no longer exists (already deleted)', async () => {
+    if (!dbUp) return;
+    const res = await request(app)
+      .delete(`/organizations/${orgIdToDelete}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('does not delete the other admin\'s organization it does not own', async () => {
+    // Sanity check that orgIdToKeep is untouched (guards against a bug
+    // that deletes by created_by alone, ignoring the id).
+    if (!dbUp) return;
+    const check = await pool.query('SELECT id FROM organizations WHERE id = $1', [orgIdToKeep]);
+    expect(check.rows).toHaveLength(1);
+  });
+});

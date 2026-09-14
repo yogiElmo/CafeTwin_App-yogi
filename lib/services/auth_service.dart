@@ -232,6 +232,35 @@ class AuthService {
     }
   }
 
+  /// Deletes an organization the calling admin created. Returns null on
+  /// success, or a short user-facing error message on failure (not
+  /// authorized, not found/not yours, or the backend being unreachable).
+  static Future<String?> deleteOrganization(String id) async {
+    if (!ApiService.isEnabled) {
+      return 'No backend is configured (API_BASE_URL not set).';
+    }
+    try {
+      final http.Response resp = await http
+          .delete(
+            Uri.parse('${ApiService.baseUrl}/organizations/$id'),
+            headers: ApiService.authHeaders,
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 204) {
+        return null;
+      }
+      if (resp.statusCode == 404) {
+        return 'That organization was not found.';
+      }
+      if (resp.statusCode == 403) {
+        return 'Only an admin can delete organizations.';
+      }
+      return 'Failed to delete organization (server responded with ${resp.statusCode}).';
+    } catch (e) {
+      return 'Could not reach the backend at ${ApiService.baseUrl}.';
+    }
+  }
+
   /// Deletes a login account. Returns null on success, or a short
   /// user-facing error message on failure (not authorized, self-delete,
   /// last-admin, not found, or the backend being unreachable).
