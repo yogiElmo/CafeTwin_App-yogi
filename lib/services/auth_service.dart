@@ -176,8 +176,33 @@ class AuthService {
     return true;
   }
 
-  /// Clears the stored token, role and username (logout).
+  /// Logs out: asks the backend to revoke this device's session
+  /// server-side first (`POST /auth/logout`), then clears the stored
+  /// token, role and username locally.
+  ///
+  /// The backend call is best-effort -- a network failure (or no backend
+  /// being configured at all, e.g. the demo fallback) must never block a
+  /// local logout, so any error there is swallowed and the local sign-out
+  /// proceeds regardless. This is what makes "Logout" a real server-side
+  /// action rather than just this device discarding its own copy of the
+  /// token: once revoked, the old token is rejected by the backend on its
+  /// very next use, even though it hasn't expired yet.
   static Future<void> logout() async {
+    if (ApiService.isEnabled) {
+      try {
+        await http
+            .post(
+              Uri.parse('${ApiService.baseUrl}/auth/logout'),
+              headers: ApiService.authHeaders,
+            )
+            .timeout(const Duration(seconds: 5));
+      } catch (e) {
+        developer.log(
+          'POST /auth/logout failed (logging out locally anyway): $e',
+          name: 'AuthService',
+        );
+      }
+    }
     await _storage.delete(key: _tokenKey);
     await _storage.delete(key: _roleKey);
     await _storage.delete(key: _usernameKey);

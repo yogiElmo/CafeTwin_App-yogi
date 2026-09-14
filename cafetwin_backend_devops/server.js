@@ -56,20 +56,68 @@ app.use(rateLimit({
   legacyHeaders: false,
 }));
 
+// Verifies a Bearer JWT's signature/expiry AND -- when the token carries a
+// session "jti" claim (every token issued by the current POST /auth/login;
+// see AUTH SESSIONS below) -- that the session behind it hasn't been
+// revoked via logout or DELETE /auth/sessions/:id. A token with no jti
+// (issued before this feature existed, or found unrecognized in the
+// table) is treated as always-valid until it expires naturally, so
+// deploying this doesn't invalidate anyone already logged in.
+//
+// Returns { decoded } on success, or { error, message } to send straight
+// back to the client -- callers below just relay whichever comes back.
+async function authenticateBearer(req) {
+  const authHeader = req.get('authorization') || '';
+  if (!authHeader.startsWith('Bearer ')) {
+    return { error: 401, message: 'This endpoint requires a Bearer token from a logged-in user.' };
+  }
+  let decoded;
+  try {
+    decoded = jwt.verify(authHeader.slice(7), JWT_SECRET);
+  } catch (err) {
+    return { error: 401, message: 'Invalid or expired token.' };
+  }
+  if (await isSessionRevoked(decoded.jti)) {
+    return { error: 401, message: 'This session has been logged out. Please log in again.' };
+  }
+  return { decoded };
+}
+
+async function isSessionRevoked(jti) {
+  if (!jti) return false;
+  try {
+    const result = await pool.query('SELECT revoked_at FROM auth_sessions WHERE jti = $1', [jti]);
+    if (result.rows.length === 0) return false; // unrecognized jti -- fail open, don't break it
+    return result.rows[0].revoked_at !== null;
+  } catch (err) {
+    console.error('[auth] failed checking session revocation:', err);
+    return false; // a DB hiccup here should not lock everyone out
+  }
+}
+
+// Fire-and-forget: bumps last_seen_at so GET /auth/sessions can show which
+// session is actually still active, without adding latency to the request
+// that triggered it.
+function touchSession(jti) {
+  if (!jti) return;
+  pool
+    .query('UPDATE auth_sessions SET last_seen_at = now() WHERE jti = $1 AND revoked_at IS NULL', [jti])
+    .catch((err) => console.error('[auth] failed to update session last_seen_at:', err));
+}
+
 // Write routes accept EITHER a valid JWT (issued by POST /auth/login --
 // the app's real authenticated path) OR the legacy x-api-key shared
 // secret (for service-to-service callers such as simulate.js that never
 // go through a human login). /auth/login itself is exempt (that's where
 // a client gets a token in the first place).
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const authHeader = req.get('authorization') || '';
   if (authHeader.startsWith('Bearer ')) {
-    try {
-      req.user = jwt.verify(authHeader.slice(7), JWT_SECRET);
-      return next();
-    } catch (err) {
-      return res.status(401).json({ error: 'Invalid or expired token.' });
-    }
+    const auth = await authenticateBearer(req);
+    if (auth.error) return res.status(auth.error).json({ error: auth.message });
+    req.user = auth.decoded;
+    touchSession(auth.decoded.jti);
+    return next();
   }
   if (!process.env.API_KEY) return next();
   if (req.get('x-api-key') === process.env.API_KEY) return next();
@@ -88,23 +136,28 @@ app.use((req, res, next) => {
 // genuine Bearer JWT specifically. A service-account x-api-key has no
 // associated user or role, so it can never satisfy a role check.
 function requireRole(role) {
-  return (req, res, next) => {
-    const authHeader = req.get('authorization') || '';
-    if (!authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'This endpoint requires a Bearer token from a logged-in user.' });
-    }
-    let decoded;
-    try {
-      decoded = jwt.verify(authHeader.slice(7), JWT_SECRET);
-    } catch (err) {
-      return res.status(401).json({ error: 'Invalid or expired token.' });
-    }
-    if (decoded.role !== role) {
+  return async (req, res, next) => {
+    const auth = await authenticateBearer(req);
+    if (auth.error) return res.status(auth.error).json({ error: auth.message });
+    if (auth.decoded.role !== role) {
       return res.status(403).json({ error: `This action requires the "${role}" role.` });
     }
-    req.user = decoded;
+    req.user = auth.decoded;
+    touchSession(auth.decoded.jti);
     next();
   };
+}
+
+// Same as requireRole, but for endpoints any logged-in account (admin or
+// staff) may use on their OWN behalf -- viewing/revoking their own auth
+// sessions. A service-account x-api-key never satisfies this either, since
+// there is no account behind it to scope "own sessions" to.
+async function requireAnyUser(req, res, next) {
+  const auth = await authenticateBearer(req);
+  if (auth.error) return res.status(auth.error).json({ error: auth.message });
+  req.user = auth.decoded;
+  touchSession(auth.decoded.jti);
+  next();
 }
 
 // --- Database ------------------------------------------------------------
@@ -157,8 +210,16 @@ app.post('/auth/login', loginLimiter, async (req, res) => {
     if (!passwordOk || !pinOk) {
       return res.status(401).json({ error: 'Invalid username, password or PIN.' });
     }
+    // One auth_sessions row per login, keyed by a fresh jti embedded in the
+    // token itself -- this is what GET /auth/sessions lists and what
+    // POST /auth/logout / DELETE /auth/sessions/:id revoke later.
+    const jti = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO auth_sessions (jti, admin_id, user_agent, ip) VALUES ($1, $2, $3, $4)`,
+      [jti, admin.id, (req.get('user-agent') || '').slice(0, 255), req.ip]
+    );
     const token = jwt.sign(
-      { sub: admin.id, username: admin.username, role: admin.role },
+      { sub: admin.id, username: admin.username, role: admin.role, jti },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
@@ -166,6 +227,84 @@ app.post('/auth/login', loginLimiter, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong during login.' });
+  }
+});
+
+// ============================================================
+// AUTH SESSIONS (server-side session tracking + real logout)
+// ============================================================
+// These are login/auth sessions -- distinct from the gameplay `sessions`
+// table further down (station play-time tracking). Each row here is one
+// device's login, created by POST /auth/login and looked up by jti in
+// authenticateBearer above.
+
+// Any logged-in account -- admin or staff -- can list their OWN sessions.
+// "current" flags whichever row matches the token used to make this
+// request, since the JWT doesn't otherwise identify itself to the caller.
+app.get('/auth/sessions', requireAnyUser, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, jti, user_agent, ip, created_at, last_seen_at, revoked_at
+       FROM auth_sessions WHERE admin_id = $1 ORDER BY created_at DESC`,
+      [req.user.sub]
+    );
+    res.json(result.rows.map((row) => ({
+      id: row.id,
+      userAgent: row.user_agent,
+      ip: row.ip,
+      createdAt: row.created_at,
+      lastSeenAt: row.last_seen_at,
+      revokedAt: row.revoked_at,
+      current: row.jti === req.user.jti,
+    })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong fetching sessions.' });
+  }
+});
+
+// Revokes one of the caller's OWN sessions -- e.g. "sign out that other
+// device" -- scoped by admin_id the same "not yours -> 404" way as
+// DELETE /organizations/:id. There is no cross-account revoke; removing
+// someone else's access entirely is DELETE /admin/users/:username.
+app.delete('/auth/sessions/:id', requireAnyUser, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `UPDATE auth_sessions SET revoked_at = now()
+       WHERE id = $1 AND admin_id = $2 AND revoked_at IS NULL
+       RETURNING id`,
+      [id, req.user.sub]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Session not found.' });
+    }
+    res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong revoking the session.' });
+  }
+});
+
+// Logs out the CURRENT session -- the one this very token belongs to.
+// This is what makes the app's "Logout" a real server-side action: the
+// token is rejected on its next authenticated request even though it
+// hasn't expired yet, rather than the client just discarding its copy.
+// A token with no jti (issued before this feature existed) has nothing to
+// revoke server-side; it simply expires on its own, same as before.
+app.post('/auth/logout', requireAnyUser, async (req, res) => {
+  if (!req.user.jti) {
+    return res.status(204).end();
+  }
+  try {
+    await pool.query(
+      `UPDATE auth_sessions SET revoked_at = now() WHERE jti = $1 AND revoked_at IS NULL`,
+      [req.user.jti]
+    );
+    res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong logging out.' });
   }
 });
 
@@ -579,8 +718,11 @@ app.patch('/alerts/:alertId', async (req, res) => {
 });
 
 // ============================================================
-// SESSIONS
+// SESSIONS (gameplay/play-time -- NOT auth sessions)
 // ============================================================
+// These track how long a station was occupied and playing what, for
+// utilization/report purposes. For login/auth session tracking (a device
+// signing in, and being signed out server-side), see AUTH SESSIONS above.
 
 app.post('/stations/:stationId/sessions/start', async (req, res) => {
   const { stationId } = req.params;

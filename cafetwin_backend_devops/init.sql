@@ -94,3 +94,24 @@ CREATE TABLE IF NOT EXISTS admins (
 -- they set up; those just become unowned, exactly like the x-api-key case.
 ALTER TABLE organizations
   ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES admins(id) ON DELETE SET NULL;
+
+-- Server-side session tracking for the JWT auth flow. One row per
+-- successful login (created by POST /auth/login), keyed by the token's
+-- own "jti" claim, so a specific device's session can be revoked without
+-- touching any other session on the same account. This is what turns
+-- "Logout" in the app into a real server-side action -- the token is
+-- rejected on its very next authenticated request -- rather than just the
+-- client discarding its local copy. See authenticateBearer/isSessionRevoked
+-- in server.js, and GET/DELETE /auth/sessions + POST /auth/logout.
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  admin_id     UUID REFERENCES admins(id) ON DELETE CASCADE,
+  jti          UUID UNIQUE NOT NULL,
+  user_agent   TEXT,
+  ip           TEXT,
+  created_at   TIMESTAMPTZ DEFAULT now(),
+  last_seen_at TIMESTAMPTZ DEFAULT now(),
+  revoked_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_admin_id ON auth_sessions(admin_id);
