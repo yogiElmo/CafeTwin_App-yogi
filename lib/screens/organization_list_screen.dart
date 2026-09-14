@@ -5,6 +5,7 @@ import '../models/station.dart';
 import '../services/auth_service.dart';
 import '../state/cafe_state.dart';
 import 'home_shell.dart';
+import 'login_screen.dart';
 import 'setup_screen.dart';
 
 /// Post-login landing page for admins: lists every organization this admin
@@ -18,14 +19,28 @@ import 'setup_screen.dart';
 ///
 /// Every navigation out of this screen uses `pushReplacement`. Opening or
 /// creating an organization is otherwise one-shot per [CafeState] instance
-/// (safe to configure/load only once) -- [HomeShell]'s "Leave Organization"
-/// action is what makes it safe to land back on a fresh copy of this
-/// screen afterwards: it calls [CafeState.reset] first, so picking a
-/// different organization next actually takes effect.
+/// (safe to configure/load only once) -- [HomeShell]'s "Log Off
+/// Organization" action is what makes it safe to land back on a fresh copy
+/// of this screen afterwards: it calls [CafeState.reset] first, so picking
+/// a different organization next actually takes effect.
+///
+/// The AppBar carries its own "Logout" action (full account sign-out, same
+/// as [HomeShell]'s) so an admin who is sitting on this list -- either
+/// right after login or right after logging off an organization -- always
+/// has a way to sign out completely without first having to open one.
 class OrganizationListScreen extends StatefulWidget {
-  const OrganizationListScreen({super.key, required this.state});
+  const OrganizationListScreen({
+    super.key,
+    required this.state,
+    this.justLoggedOff = false,
+  });
 
   final CafeState state;
+
+  /// True when this screen was reached via [HomeShell]'s "Log Off
+  /// Organization" action -- shows a one-time confirmation snackbar so the
+  /// admin gets clear feedback that it actually happened.
+  final bool justLoggedOff;
 
   @override
   State<OrganizationListScreen> createState() =>
@@ -56,6 +71,28 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
   void initState() {
     super.initState();
     _refresh();
+    if (widget.justLoggedOff) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Logged off from the organization.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      });
+    }
+  }
+
+  Future<void> _logout() async {
+    await AuthService.logout();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => LoginScreen(state: widget.state),
+      ),
+      (Route<dynamic> route) => false,
+    );
   }
 
   Future<void> _refresh() async {
@@ -257,6 +294,13 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
       appBar: AppBar(
         automaticallyImplyLeading: false,
         title: const Text('Your Organizations'),
+        actions: <Widget>[
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Logout',
+            onPressed: _logout,
+          ),
+        ],
       ),
       body: SafeArea(
         child: Center(

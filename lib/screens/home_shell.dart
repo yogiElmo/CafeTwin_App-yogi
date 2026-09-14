@@ -60,8 +60,10 @@ class _HomeShellState extends State<HomeShell> {
     widget.state.reset();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (BuildContext context) =>
-            OrganizationListScreen(state: widget.state),
+        builder: (BuildContext context) => OrganizationListScreen(
+          state: widget.state,
+          justLoggedOff: true,
+        ),
       ),
     );
   }
