@@ -1,0 +1,104 @@
+# Scheduled uptime + latency monitor for the CaféTwin backend.
+#
+# Before this workflow existed, the only signal that the backend was alive
+# was Render's own internal health poll -- invisible to the team, with no
+# history and no alerting. This gives an independent, scheduled check with
+# a visible pass/fail history (Actions run list) and a latency trend
+# (each run's step summary), using the same repository variable
+# (API_BASE_URL) deploy-web.yml already reads.
+#
+# TWO REQUESTS PER RUN, ON PURPOSE -- Render's free-tier web services spin
+# down after ~15 minutes idle and take several seconds (observed: up to
+# ~10s, occasionally more) to wake back up on the next request. A single
+# strict-timeout check would misreport that normal cold start as an
+# outage. So:
+#   1. A generous "wake it up" request (45s timeout) -- this run only
+#      fails if THIS one errors out, since a slow-but-eventually-200
+#      response here is expected behaviour, not a problem.
+#   2. An immediate second "warm" request (10s timeout) -- the backend is
+#      now awake, so this measures what a real user's *next* request
+#      would actually experience. This is the one compared against the
+#      latency budget below.
+#
+# Requires no secrets -- API_BASE_URL is a repository VARIABLE (not
+# sensitive), already set for deploy-web.yml.
+
+name: Uptime monitor
+
+env:
+  # Warm-request latency budget in milliseconds. Deliberately tight --
+  # this only measures the SECOND (already-awake) request, so a healthy
+  # backend should comfortably beat this. Exceeding it produces a
+  # warning annotation, not a failed run (a slow-but-working backend
+  # shouldn't page anyone the way a real outage should).
+  LATENCY_BUDGET_MS: "3000"
+
+on:
+  schedule:
+    # Every 15 minutes.
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check backend health + latency
+        run: |
+          set -uo pipefail
+
+          if [ -z "${{ vars.API_BASE_URL }}" ]; then
+            echo "::error::API_BASE_URL repository variable is not set (Settings -> Secrets and variables -> Actions -> Variables)." >&2
+            exit 1
+          fi
+          URL="${{ vars.API_BASE_URL }}/health"
+          TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          echo "## Backend health check -- $TIMESTAMP" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Request | Status | Latency (ms) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- 1. Wake-up request: generous timeout, only fails on a genuine error ---
+          # Note: curl's -w string is trusted as-is (it fills in 000/0 for
+          # fields it couldn't measure, e.g. a DNS failure) -- no "|| echo"
+          # fallback here, since curl still prints partial -w output even
+          # on failure, which would otherwise get concatenated on top of a
+          # fallback string and corrupt the parse.
+          WAKE_RESULT="$(curl -s -o /tmp/wake_body.json -w "%{http_code} %{time_total}" --max-time 45 "$URL")"
+          if [ -z "$WAKE_RESULT" ]; then
+            WAKE_RESULT="000 45.000"
+          fi
+          WAKE_STATUS=$(echo "$WAKE_RESULT" | awk '{print $1}')
+          WAKE_MS=$(awk "BEGIN {printf \"%.0f\", $(echo "$WAKE_RESULT" | awk '{print $2}') * 1000}")
+          echo "| wake-up | $WAKE_STATUS | $WAKE_MS |" >> "$GITHUB_STEP_SUMMARY"
+          echo "Wake-up request: status=$WAKE_STATUS latency=${WAKE_MS}ms"
+
+          if [ "$WAKE_STATUS" != "200" ]; then
+            echo "::error::Backend did not respond with 200 even after a 45s wake-up window (status=$WAKE_STATUS). Body:" >&2
+            cat /tmp/wake_body.json >&2 2>/dev/null || true
+            exit 1
+          fi
+
+          # --- 2. Warm request: the backend is awake now, so THIS is the real signal ---
+          WARM_RESULT="$(curl -s -o /tmp/warm_body.json -w "%{http_code} %{time_total}" --max-time 10 "$URL")"
+          if [ -z "$WARM_RESULT" ]; then
+            WARM_RESULT="000 10.000"
+          fi
+          WARM_STATUS=$(echo "$WARM_RESULT" | awk '{print $1}')
+          WARM_MS=$(awk "BEGIN {printf \"%.0f\", $(echo "$WARM_RESULT" | awk '{print $2}') * 1000}")
+          echo "| warm | $WARM_STATUS | $WARM_MS |" >> "$GITHUB_STEP_SUMMARY"
+          echo "Warm request: status=$WARM_STATUS latency=${WARM_MS}ms"
+
+          if [ "$WARM_STATUS" != "200" ]; then
+            echo "::error::Backend responded to the wake-up request but failed the immediate follow-up (status=$WARM_STATUS) -- looks like a real problem, not a cold start." >&2
+            cat /tmp/warm_body.json >&2 2>/dev/null || true
+            exit 1
+          fi
+
+          if [ "$WARM_MS" -gt "$LATENCY_BUDGET_MS" ]; then
+            echo "::warning::Warm-request latency ${WARM_MS}ms exceeded the ${LATENCY_BUDGET_MS}ms budget."
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Backend healthy. Warm latency: ${WARM_MS}ms (budget: ${LATENCY_BUDGET_MS}ms)." >> "$GITHUB_STEP_SUMMARY"
