@@ -1,0 +1,55 @@
+# Static application security testing (SAST) for the Node/Express backend.
+#
+# CodeQL scans source code for known vulnerability patterns (SQL/command
+# injection, hardcoded secrets, unsafe deserialization, etc.) on every push
+# and PR to main, plus a weekly sweep to catch newly-published query packs
+# against code that hasn't changed. Findings show up under the repo's
+# Security tab as code scanning alerts.
+#
+# Coverage note: CodeQL does not support Dart, so this only analyses the
+# JavaScript/Node.js backend (cafetwin_backend_devops, cafetwin_backend_security's
+# .sh/.conf files aren't code CodeQL scans either). The Flutter/Dart client
+# is not covered by this workflow.
+
+name: "CodeQL"
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    # Weekly sweep, unrelated to any push -- catches new query-pack
+    # findings against code that hasn't changed.
+    - cron: "0 4 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze (javascript)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ "javascript" ]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
