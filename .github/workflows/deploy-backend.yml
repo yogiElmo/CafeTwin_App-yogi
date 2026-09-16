@@ -59,7 +59,7 @@ jobs:
       PGPASSWORD: cafetwin_ci
       JWT_SECRET: ci-test-secret-do-not-use-in-production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -85,7 +85,7 @@ jobs:
     if: ${{ vars.ENABLE_VM_DEPLOY == 'true' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
