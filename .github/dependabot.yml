@@ -1,0 +1,44 @@
+# Automated dependency-update PRs.
+#
+# Before this file existed, dependency versions in this repo only moved
+# when someone happened to run `npm install`/`flutter pub upgrade`
+# manually -- no visibility into outdated or vulnerable packages, and no
+# routine way to find out. Dependabot opens a PR itself (with a changelog
+# link and compatibility score) whenever an update is available, on the
+# schedule below, for each ecosystem actually used in this repo:
+#   - npm          -> cafetwin_backend_devops (the Node/Express backend)
+#   - pub          -> repo root (the Flutter/Dart app's pubspec.yaml)
+#   - github-actions -> repo root (the workflow files under .github/workflows)
+#
+# (cafetwin_backend_security has no package.json/lockfile of its own --
+# it's shell scripts and a fail2ban config, not a dependency-managed
+# package -- so it has no ecosystem entry here.)
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/cafetwin_backend_devops"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "backend"
+
+  - package-ecosystem: "pub"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "flutter"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "ci"
