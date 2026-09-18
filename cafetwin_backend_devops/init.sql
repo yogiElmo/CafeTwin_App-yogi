@@ -95,6 +95,39 @@ CREATE TABLE IF NOT EXISTS admins (
 ALTER TABLE organizations
   ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES admins(id) ON DELETE SET NULL;
 
+-- TOTP (Google Authenticator / Microsoft Authenticator / Authy -- any
+-- app that speaks the same RFC 6238 standard) multi-factor authentication
+-- for admin accounts. totp_secret is written by POST /auth/totp/setup but
+-- does NOT make login require a code by itself -- that only happens once
+-- totp_enabled is flipped true by POST /auth/totp/enable, after the admin
+-- proves they actually scanned it. Scoped to admins only (see the
+-- gap-analysis report): staff share terminals on the café floor, where a
+-- second factor is friction with no real payoff, while an admin account
+-- can create, delete, and manage every other account. ADD COLUMN IF NOT
+-- EXISTS keeps this safe to re-run against a database that predates MFA,
+-- same as created_by above.
+ALTER TABLE admins
+  ADD COLUMN IF NOT EXISTS totp_secret TEXT,
+  ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false;
+
+-- One-time recovery codes for an admin who enabled TOTP and then lost
+-- their authenticator device. Generated once, when TOTP is enabled
+-- (POST /auth/totp/enable) or explicitly regenerated
+-- (POST /auth/totp/recovery-codes/regenerate); each row is single-use,
+-- consumed by setting used_at the first time it's accepted at login.
+-- Hashed with bcrypt exactly like password_hash/pin_hash below -- the
+-- plaintext codes are returned to the admin ONCE in the API response and
+-- never stored.
+CREATE TABLE IF NOT EXISTS totp_recovery_codes (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  admin_id   UUID REFERENCES admins(id) ON DELETE CASCADE,
+  code_hash  TEXT NOT NULL,
+  used_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_totp_recovery_codes_admin_id ON totp_recovery_codes(admin_id);
+
 -- Server-side session tracking for the JWT auth flow. One row per
 -- successful login (created by POST /auth/login), keyed by the token's
 -- own "jti" claim, so a specific device's session can be revoked without

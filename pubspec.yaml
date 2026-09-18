@@ -11,6 +11,11 @@ dependencies:
     sdk: flutter
   http: ^1.2.2
   flutter_secure_storage: ^9.2.2
+  # Renders the otpauth:// URI POST /auth/totp/setup returns as a QR code
+  # on-device, entirely client-side -- the backend never generates an
+  # image, just the URI (see the "TOTP MULTI-FACTOR AUTHENTICATION"
+  # section of cafetwin_backend_devops/server.js).
+  qr_flutter: ^4.1.0
 
 dev_dependencies:
   flutter_test:

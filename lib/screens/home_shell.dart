@@ -4,6 +4,7 @@ import '../services/auth_service.dart';
 import '../state/cafe_state.dart';
 import 'alerts_screen.dart';
 import 'login_screen.dart';
+import 'mfa_setup_screen.dart';
 import 'organization_list_screen.dart';
 import 'simulation_screen.dart';
 import 'station_grid_screen.dart';
@@ -13,7 +14,9 @@ import 'user_management_screen.dart';
 /// The Alerts tab carries a red badge with the unacknowledged alert count.
 ///
 /// The AppBar also carries an admin-only "Manage Users" action, an
-/// admin-only "Log Off Organization" action, and a logout button.
+/// admin-only "Multi-Factor Authentication" action (opens
+/// [MfaSetupScreen]), an admin-only "Log Off Organization" action, and a
+/// logout button.
 ///
 /// "Log Off Organization" is distinct from "Logout": it stays signed in to
 /// the same admin account but returns to [OrganizationListScreen] so a
@@ -82,6 +85,14 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  void _openMfaSetup() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => const MfaSetupScreen(),
+      ),
+    );
+  }
+
   void _leaveOrganization() {
     widget.state.reset();
     Navigator.of(context).pushReplacement(
@@ -113,6 +124,12 @@ class _HomeShellState extends State<HomeShell> {
                   icon: const Icon(Icons.manage_accounts_outlined),
                   tooltip: 'Manage Users',
                   onPressed: _openUserManagement,
+                ),
+              if (AuthService.isAdmin)
+                IconButton(
+                  icon: const Icon(Icons.security_outlined),
+                  tooltip: 'Multi-Factor Authentication',
+                  onPressed: _openMfaSetup,
                 ),
               if (AuthService.isAdmin)
                 IconButton(

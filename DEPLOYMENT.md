@@ -146,6 +146,30 @@ backend-free demo, pass `--dart-define=DEMO_USERNAME=...
 --dart-define=DEMO_PASSWORD=... --dart-define=DEMO_PIN=...` at build/run
 time instead of hardcoding anything in source.
 
+### 7. Multi-factor authentication (admin accounts only)
+
+Any admin can turn on TOTP -- the same open standard (RFC 6238) Google
+Authenticator, Microsoft Authenticator, Authy, and 1Password all speak,
+so there's nothing vendor-specific to configure. From the app: log in,
+then the shield icon in the top app bar (admin-only, next to "Manage
+Users") opens setup -- it shows a QR code and a manual-entry secret,
+confirms with one code from the app, then shows 8 one-time recovery
+codes (save these; they're not shown again). From then on,
+`POST /auth/login` requires a `totpCode` in the request body for that
+account, on top of the existing password + PIN.
+
+Deliberately scoped to admins, not staff: staff accounts share terminals
+on the café floor, where a second factor is friction with no real
+security payoff, while an admin account can create, delete, and manage
+every other account -- see `cafetwin_backend_devops/server.js`'s "TOTP
+MULTI-FACTOR AUTHENTICATION" section and the schema comment on
+`admins.totp_enabled` in `init.sql` for the full reasoning. No new
+environment variables or secrets are needed; `init.sql` adds the
+required columns/table automatically (same `ADD COLUMN IF NOT EXISTS`
+pattern the rest of the schema uses), so this works on a fresh database
+and picks up automatically the next time `GET /admin/bootstrap` runs
+against an existing one.
+
 ## Notes / things left as-is on purpose
 
 - `ApiService` doesn't sync acknowledge/resolve state *back* from the app

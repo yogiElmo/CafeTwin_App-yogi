@@ -8,6 +8,44 @@ import '../models/admin_account.dart';
 import '../models/organization_summary.dart';
 import 'api_service.dart';
 
+/// Result of an [AuthService.login] attempt.
+///
+/// [error] is a short, user-facing message and is null on success (a
+/// token was stored and the login is complete). [requiresTotp] is true
+/// only when the account has MFA enabled and this call didn't include a
+/// (or included a wrong) `totpCode` -- [LoginScreen] uses this, rather
+/// than treating it as a generic failure, to reveal the authentication
+/// code field and let the admin submit the same credentials again with a
+/// code attached.
+class LoginResult {
+  const LoginResult({this.error, this.requiresTotp = false});
+
+  final String? error;
+  final bool requiresTotp;
+
+  bool get success => error == null;
+}
+
+/// Result of [AuthService.setupTotp]: the shared secret and the
+/// otpauth:// URI to render as a QR code. Null fields mean the call
+/// failed -- see [error].
+class TotpSetup {
+  const TotpSetup({this.secret, this.otpauthUrl, this.error});
+
+  final String? secret;
+  final String? otpauthUrl;
+  final String? error;
+}
+
+/// Result of [AuthService.enableTotp]: the one-time batch of recovery
+/// codes on success, or [error] on failure.
+class TotpEnableResult {
+  const TotpEnableResult({this.recoveryCodes, this.error});
+
+  final List<String>? recoveryCodes;
+  final String? error;
+}
+
 /// Handles admin login against the CaféTwin backend and stores the
 /// resulting JWT securely on-device.
 ///
@@ -70,24 +108,27 @@ class AuthService {
 
   /// Attempts to log in with the given credentials.
   ///
-  /// Returns null on success (a token is stored and [ApiService] is armed
-  /// for authenticated writes), or a short, user-facing error message on
-  /// failure.
-  static Future<String?> login({
+  /// [totpCode] is optional and only relevant against a real backend: pass
+  /// it once [LoginResult.requiresTotp] comes back true from a first call
+  /// that omitted it. See [LoginResult] for how success/failure/"need a
+  /// code" are distinguished.
+  static Future<LoginResult> login({
     required String username,
     required String password,
     required String pin,
+    String? totpCode,
   }) async {
     if (ApiService.isEnabled) {
-      return _loginAgainstBackend(username, password, pin);
+      return _loginAgainstBackend(username, password, pin, totpCode);
     }
     return _loginAgainstDemoFallback(username, password, pin);
   }
 
-  static Future<String?> _loginAgainstBackend(
+  static Future<LoginResult> _loginAgainstBackend(
     String username,
     String password,
     String pin,
+    String? totpCode,
   ) async {
     try {
       final http.Response resp = await http
@@ -98,6 +139,7 @@ class AuthService {
               'username': username,
               'password': password,
               'pin': pin,
+              if (totpCode != null && totpCode.isNotEmpty) 'totpCode': totpCode,
             }),
           )
           .timeout(const Duration(seconds: 8));
@@ -107,7 +149,8 @@ class AuthService {
             jsonDecode(resp.body) as Map<String, dynamic>;
         final String? token = body['token'] as String?;
         if (token == null) {
-          return 'Login succeeded but the server did not return a token.';
+          return const LoginResult(
+              error: 'Login succeeded but the server did not return a token.');
         }
         final String role = body['role'] as String? ?? 'admin';
         final String loggedInUsername = body['username'] as String? ?? username;
@@ -117,32 +160,51 @@ class AuthService {
         ApiService.setAuthToken(token);
         _currentRole = role;
         _currentUsername = loggedInUsername;
-        return null;
+        return const LoginResult();
       }
       if (resp.statusCode == 401) {
-        return 'Invalid username, password or PIN.';
+        // requiresTotp -- set on both "no code sent yet" and "wrong code"
+        // -- is how the login screen knows to reveal the code field
+        // rather than show a generic error. See admins.totp_enabled /
+        // POST /auth/login in server.js.
+        bool requiresTotp = false;
+        String message = 'Invalid username, password or PIN.';
+        try {
+          final Map<String, dynamic> body =
+              jsonDecode(resp.body) as Map<String, dynamic>;
+          requiresTotp = body['requiresTotp'] == true;
+          message = body['error'] as String? ?? message;
+        } catch (_) {
+          // Non-JSON 401 body (shouldn't happen) -- fall back to the
+          // generic message above rather than throwing.
+        }
+        return LoginResult(error: message, requiresTotp: requiresTotp);
       }
       if (resp.statusCode == 429) {
-        return 'Too many attempts — please wait a minute and try again.';
+        return const LoginResult(
+            error: 'Too many attempts — please wait a minute and try again.');
       }
-      return 'Login failed (server responded with ${resp.statusCode}).';
+      return LoginResult(
+          error: 'Login failed (server responded with ${resp.statusCode}).');
     } catch (e) {
-      return 'Could not reach the backend at ${ApiService.baseUrl}. '
-          'Check your connection or the configured API_BASE_URL.';
+      return LoginResult(
+          error: 'Could not reach the backend at ${ApiService.baseUrl}. '
+              'Check your connection or the configured API_BASE_URL.');
     }
   }
 
-  static String? _loginAgainstDemoFallback(
+  static LoginResult _loginAgainstDemoFallback(
     String username,
     String password,
     String pin,
   ) {
     if (!hasDemoFallback) {
-      return 'No backend is configured (API_BASE_URL not set) and no demo '
-          'credentials were provided.\nPass --dart-define=API_BASE_URL=... '
-          'to log in against a real backend, or --dart-define=DEMO_USERNAME=... '
-          '--dart-define=DEMO_PASSWORD=... --dart-define=DEMO_PIN=... for an '
-          'offline demo.';
+      return const LoginResult(
+          error: 'No backend is configured (API_BASE_URL not set) and no demo '
+              'credentials were provided.\nPass --dart-define=API_BASE_URL=... '
+              'to log in against a real backend, or --dart-define=DEMO_USERNAME=... '
+              '--dart-define=DEMO_PASSWORD=... --dart-define=DEMO_PIN=... for an '
+              'offline demo.');
     }
     final bool ok = username == _demoUsername &&
         password == _demoPassword &&
@@ -152,7 +214,9 @@ class AuthService {
       _currentRole = 'admin';
       _currentUsername = username;
     }
-    return ok ? null : 'Invalid username, password or PIN.';
+    return ok
+        ? const LoginResult()
+        : const LoginResult(error: 'Invalid username, password or PIN.');
   }
 
   /// Restores a previously stored token (e.g. on app relaunch) into
@@ -408,6 +472,171 @@ class AuthService {
       return 'Failed to create user (server responded with ${resp.statusCode}).';
     } catch (e) {
       return 'Could not reach the backend at ${ApiService.baseUrl}.';
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // TOTP multi-factor auth (admin accounts only -- see the "TOTP
+  // MULTI-FACTOR AUTHENTICATION" section of cafetwin_backend_devops/
+  // server.js). Every method below operates on the CALLING admin's own
+  // account; there is no "set up MFA for someone else."
+  // ------------------------------------------------------------------
+
+  /// Whether the currently logged-in admin has MFA enabled. Returns null
+  /// (rather than throwing) if unreachable, disabled, or the caller isn't
+  /// an admin.
+  static Future<bool?> getTotpStatus() async {
+    if (!ApiService.isEnabled) return null;
+    try {
+      final http.Response resp = await http
+          .get(
+            Uri.parse('${ApiService.baseUrl}/auth/totp/status'),
+            headers: ApiService.authHeaders,
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        final Map<String, dynamic> body =
+            jsonDecode(resp.body) as Map<String, dynamic>;
+        return body['enabled'] as bool? ?? false;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Step 1 of turning MFA on: asks the backend for a fresh secret and
+  /// the otpauth:// URI to render as a QR code (see [TotpSetup]). This
+  /// does not enable MFA by itself -- call [enableTotp] with a code from
+  /// the just-scanned authenticator app to finish.
+  static Future<TotpSetup> setupTotp() async {
+    if (!ApiService.isEnabled) {
+      return const TotpSetup(error: 'No backend is configured (API_BASE_URL not set).');
+    }
+    try {
+      final http.Response resp = await http
+          .post(
+            Uri.parse('${ApiService.baseUrl}/auth/totp/setup'),
+            headers: ApiService.authHeaders,
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        final Map<String, dynamic> body =
+            jsonDecode(resp.body) as Map<String, dynamic>;
+        return TotpSetup(
+          secret: body['secret'] as String?,
+          otpauthUrl: body['otpauthUrl'] as String?,
+        );
+      }
+      if (resp.statusCode == 403) {
+        return const TotpSetup(error: 'Only an admin can set up MFA.');
+      }
+      return TotpSetup(
+          error: 'Failed to start MFA setup (server responded with ${resp.statusCode}).');
+    } catch (e) {
+      return TotpSetup(error: 'Could not reach the backend at ${ApiService.baseUrl}.');
+    }
+  }
+
+  /// Step 2: confirms setup with the current 6-digit code from the
+  /// authenticator app. On success, MFA is now required at login and
+  /// [TotpEnableResult.recoveryCodes] holds 8 one-time codes that are
+  /// shown ONLY in this response -- the caller must display them for the
+  /// admin to save before navigating away.
+  static Future<TotpEnableResult> enableTotp(String totpCode) async {
+    if (!ApiService.isEnabled) {
+      return const TotpEnableResult(error: 'No backend is configured (API_BASE_URL not set).');
+    }
+    try {
+      final http.Response resp = await http
+          .post(
+            Uri.parse('${ApiService.baseUrl}/auth/totp/enable'),
+            headers: ApiService.authHeaders,
+            body: jsonEncode(<String, String>{'totpCode': totpCode}),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        final Map<String, dynamic> body =
+            jsonDecode(resp.body) as Map<String, dynamic>;
+        final List<dynamic> codes = body['recoveryCodes'] as List<dynamic>? ?? <dynamic>[];
+        return TotpEnableResult(
+            recoveryCodes: codes.map((dynamic c) => c as String).toList());
+      }
+      if (resp.statusCode == 401) {
+        return const TotpEnableResult(error: 'Invalid authentication code.');
+      }
+      return TotpEnableResult(
+          error: 'Failed to enable MFA (server responded with ${resp.statusCode}).');
+    } catch (e) {
+      return TotpEnableResult(error: 'Could not reach the backend at ${ApiService.baseUrl}.');
+    }
+  }
+
+  /// Turns MFA off using the account's own current password + PIN (not a
+  /// TOTP code -- see the comment on POST /auth/totp/disable in
+  /// server.js for why). Returns null on success, or a short user-facing
+  /// error message on failure.
+  static Future<String?> disableTotp({
+    required String password,
+    required String pin,
+  }) async {
+    if (!ApiService.isEnabled) {
+      return 'No backend is configured (API_BASE_URL not set).';
+    }
+    try {
+      final http.Response resp = await http
+          .post(
+            Uri.parse('${ApiService.baseUrl}/auth/totp/disable'),
+            headers: ApiService.authHeaders,
+            body: jsonEncode(<String, String>{'password': password, 'pin': pin}),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 204) {
+        return null;
+      }
+      if (resp.statusCode == 401) {
+        return 'Invalid password or PIN.';
+      }
+      return 'Failed to disable MFA (server responded with ${resp.statusCode}).';
+    } catch (e) {
+      return 'Could not reach the backend at ${ApiService.baseUrl}.';
+    }
+  }
+
+  /// Invalidates every existing recovery code and issues a fresh batch of
+  /// 8, shown ONCE, same re-authentication as [disableTotp].
+  static Future<TotpEnableResult> regenerateRecoveryCodes({
+    required String password,
+    required String pin,
+  }) async {
+    if (!ApiService.isEnabled) {
+      return const TotpEnableResult(error: 'No backend is configured (API_BASE_URL not set).');
+    }
+    try {
+      final http.Response resp = await http
+          .post(
+            Uri.parse('${ApiService.baseUrl}/auth/totp/recovery-codes/regenerate'),
+            headers: ApiService.authHeaders,
+            body: jsonEncode(<String, String>{'password': password, 'pin': pin}),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        final Map<String, dynamic> body =
+            jsonDecode(resp.body) as Map<String, dynamic>;
+        final List<dynamic> codes = body['recoveryCodes'] as List<dynamic>? ?? <dynamic>[];
+        return TotpEnableResult(
+            recoveryCodes: codes.map((dynamic c) => c as String).toList());
+      }
+      if (resp.statusCode == 401) {
+        return const TotpEnableResult(error: 'Invalid password or PIN.');
+      }
+      if (resp.statusCode == 400) {
+        return const TotpEnableResult(error: 'MFA is not enabled on this account.');
+      }
+      return TotpEnableResult(
+          error: 'Failed to regenerate recovery codes (server responded with ${resp.statusCode}).');
+    } catch (e) {
+      return TotpEnableResult(error: 'Could not reach the backend at ${ApiService.baseUrl}.');
     }
   }
 }

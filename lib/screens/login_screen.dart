@@ -40,10 +40,18 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _pinController = TextEditingController();
+  final TextEditingController _totpController = TextEditingController();
 
   String? _error;
   bool _submitting = false;
   bool _checkingSession = true;
+
+  /// True once the backend has responded to a login attempt with
+  /// `requiresTotp: true` -- i.e. password+PIN were correct, but this
+  /// account has MFA enabled and needs a code too. Reveals the
+  /// authentication-code field so the SAME credentials can be resubmitted
+  /// with it, rather than treating this as a generic login failure.
+  bool _needsTotp = false;
 
   @override
   void initState() {
@@ -81,6 +89,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _usernameController.dispose();
     _passwordController.dispose();
     _pinController.dispose();
+    _totpController.dispose();
     super.dispose();
   }
 
@@ -103,16 +112,20 @@ class _LoginScreenState extends State<LoginScreen> {
       _submitting = true;
       _error = null;
     });
-    final String? error = await AuthService.login(
+    final LoginResult result = await AuthService.login(
       username: _usernameController.text.trim(),
       password: _passwordController.text,
       pin: _pinController.text.trim(),
+      totpCode: _needsTotp ? _totpController.text.trim() : null,
     );
     if (!mounted) return;
-    if (error != null) {
+    if (!result.success) {
       setState(() {
         _submitting = false;
-        _error = error;
+        _error = result.error;
+        // Sticky once true within this attempt -- a wrong code re-shows
+        // the field rather than collapsing it back to a plain error.
+        _needsTotp = _needsTotp || result.requiresTotp;
       });
       return;
     }
@@ -210,9 +223,28 @@ class _LoginScreenState extends State<LoginScreen> {
                         keyboardType: TextInputType.number,
                         decoration: _fieldDecoration(
                             'Authentication PIN', Icons.pin_outlined),
-                        textInputAction: TextInputAction.done,
-                        onSubmitted: (_) => _login(),
+                        textInputAction: _needsTotp
+                            ? TextInputAction.next
+                            : TextInputAction.done,
+                        onSubmitted: (_) => _needsTotp ? null : _login(),
                       ),
+                      if (_needsTotp) ...<Widget>[
+                        const SizedBox(height: 14),
+                        Text(
+                          'Enter the 6-digit code from your authenticator '
+                          'app (or a recovery code).',
+                          style: TextStyle(fontSize: 12, color: dim),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _totpController,
+                          autofocus: true,
+                          decoration: _fieldDecoration(
+                              'Authentication code', Icons.security_outlined),
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) => _login(),
+                        ),
+                      ],
                       if (_error != null) ...<Widget>[
                         const SizedBox(height: 12),
                         Text(
@@ -247,7 +279,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   color: Color(0xFF1E1B18),
                                 ),
                               )
-                            : const Text('Login'),
+                            : Text(_needsTotp ? 'Verify code' : 'Login'),
                       ),
                       if (AuthService.hasDemoFallback) ...<Widget>[
                         const SizedBox(height: 16),

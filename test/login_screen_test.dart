@@ -58,6 +58,11 @@ void main() {
     expect(find.widgetWithText(TextField, 'Password'), findsOneWidget);
     expect(
         find.widgetWithText(TextField, 'Authentication PIN'), findsOneWidget);
+    // The MFA code field only appears once the backend responds with
+    // requiresTotp: true (see AuthService.login/LoginResult) -- not on
+    // first render, and not just because an account might have MFA on.
+    expect(
+        find.widgetWithText(TextField, 'Authentication code'), findsNothing);
 
     // Every field starts empty -- nothing is pre-filled for the admin.
     final Iterable<TextField> fields =

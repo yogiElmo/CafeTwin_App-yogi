@@ -16,6 +16,16 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const fs = require('fs');
+// TOTP (RFC 6238) multi-factor auth -- see the "TOTP MULTI-FACTOR
+// AUTHENTICATION" section below. Pinned to the otplib v12 line
+// deliberately: v13 rewrote the API around async, plugin-supplied crypto
+// backends, which buys nothing here and would only add moving parts;
+// v12's synchronous `authenticator` helper is the same one nearly every
+// "add 2FA" tutorial and Stack Overflow answer for Node uses, it has no
+// known vulnerabilities (checked via `npm audit`), and it's a couple of
+// hundred lines of well-understood code away from the standard it
+// implements. Revisit only if a real vulnerability turns up in v12.
+const { authenticator } = require('otplib');
 const path = require('path');
 
 const app = express();
@@ -193,7 +203,7 @@ const loginLimiter = rateLimit({
 });
 
 app.post('/auth/login', loginLimiter, async (req, res) => {
-  const { username, password, pin } = req.body;
+  const { username, password, pin, totpCode } = req.body;
   if (!username || !password || !pin) {
     return res.status(400).json({ error: 'Request must include "username", "password" and "pin".' });
   }
@@ -210,6 +220,27 @@ app.post('/auth/login', loginLimiter, async (req, res) => {
     if (!passwordOk || !pinOk) {
       return res.status(401).json({ error: 'Invalid username, password or PIN.' });
     }
+
+    // Second factor, admin accounts only (admins.totp_enabled -- see the
+    // schema comment in init.sql). Checked only AFTER password+PIN both
+    // already passed, so a wrong password never reveals whether MFA is
+    // even turned on for this username. `requiresTotp: true` on the 401
+    // body is what the Flutter login screen watches for to reveal the
+    // code field instead of just showing a generic error -- the client
+    // makes this same call twice (once without totpCode, once with it)
+    // rather than the server holding any pending-login state in between.
+    if (admin.totp_enabled) {
+      if (!totpCode) {
+        return res.status(401).json({ error: 'Authentication code required.', requiresTotp: true });
+      }
+      const totpOk =
+        authenticator.check(totpCode, admin.totp_secret) ||
+        (await tryConsumeRecoveryCode(admin.id, totpCode));
+      if (!totpOk) {
+        return res.status(401).json({ error: 'Invalid authentication code.', requiresTotp: true });
+      }
+    }
+
     // One auth_sessions row per login, keyed by a fresh jti embedded in the
     // token itself -- this is what GET /auth/sessions lists and what
     // POST /auth/logout / DELETE /auth/sessions/:id revoke later.
@@ -305,6 +336,207 @@ app.post('/auth/logout', requireAnyUser, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong logging out.' });
+  }
+});
+
+// ============================================================
+// TOTP MULTI-FACTOR AUTHENTICATION (admin accounts only)
+// ============================================================
+// Google Authenticator, Microsoft Authenticator, Authy, 1Password, etc.
+// are all just client apps for the same open standard -- TOTP, RFC 6238
+// -- so there is nothing Google- or Microsoft-specific to integrate here:
+// one shared secret per admin, encoded once into a QR code (rendered
+// client-side by the Flutter app from the otpauthUrl below -- this
+// backend never generates an image), and any TOTP-compatible app can
+// scan it and start producing the same rolling 6-digit code the server
+// checks with `authenticator.check`. No external account, API key, or
+// network call to either company is involved.
+//
+// Scoped to the `admin` role by design (see the gap-analysis report's
+// recommendation): staff share terminals on the café floor, where a
+// second factor is friction with no real payoff, while an admin account
+// can create, delete, and manage every other account -- that's where a
+// stolen password+PIN actually hurts.
+
+const TOTP_ISSUER = 'CaféTwin';
+
+// 10 unambiguous characters (no 0/O/1/I/L) grouped as "XXXXX-XXXXX", using
+// the same randomSecret() helper /admin/bootstrap uses for generated
+// passwords/PINs below.
+function randomRecoveryCode() {
+  const raw = randomSecret(10, 'ABCDEFGHJKMNPQRSTUVWXYZ23456789');
+  return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+}
+
+// Generates a fresh batch of recovery codes for one admin, storing only
+// their bcrypt hashes (exactly like password_hash/pin_hash) and returning
+// the plaintext codes so the caller can hand them back to the admin
+// ONCE. Replaces any previous batch outright -- there is only ever one
+// live set of recovery codes per account.
+async function issueRecoveryCodes(adminId) {
+  const codes = Array.from({ length: 8 }, randomRecoveryCode);
+  await pool.query('DELETE FROM totp_recovery_codes WHERE admin_id = $1', [adminId]);
+  await Promise.all(
+    codes.map(async (code) => {
+      const hash = await bcrypt.hash(code, 10);
+      await pool.query(
+        'INSERT INTO totp_recovery_codes (admin_id, code_hash) VALUES ($1, $2)',
+        [adminId, hash]
+      );
+    })
+  );
+  return codes;
+}
+
+// Checked at login as a fallback when the submitted code doesn't match
+// the live TOTP secret -- covers an admin who has lost their
+// authenticator device. Single-use: the matched row's used_at is set
+// immediately, so the same recovery code can never be replayed. Looping
+// over (at most 8) bcrypt comparisons rather than hashing the submitted
+// code and doing an indexed lookup is deliberate -- bcrypt hashes are
+// salted, so there is no shortcut lookup, and 8 comparisons is negligible
+// next to the bcrypt work /auth/login already does for password+PIN.
+async function tryConsumeRecoveryCode(adminId, code) {
+  const result = await pool.query(
+    'SELECT id, code_hash FROM totp_recovery_codes WHERE admin_id = $1 AND used_at IS NULL',
+    [adminId]
+  );
+  for (const row of result.rows) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await bcrypt.compare(code, row.code_hash)) {
+      await pool.query('UPDATE totp_recovery_codes SET used_at = now() WHERE id = $1', [row.id]);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Whether the calling admin currently has MFA enabled -- lets the
+// Flutter security screen show the right state (and the right button:
+// "Set up MFA" vs "Turn off MFA") without guessing.
+app.get('/auth/totp/status', requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT totp_enabled FROM admins WHERE id = $1', [req.user.sub]);
+    res.json({ enabled: result.rows[0] ? result.rows[0].totp_enabled : false });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong checking MFA status.' });
+  }
+});
+
+// Step 1 of turning MFA on: generates a fresh secret and returns it plus
+// the otpauth:// URI the Flutter app renders as a QR code. Writing the
+// secret here does NOT make login require a code yet -- that only
+// happens once POST /auth/totp/enable confirms the admin actually
+// scanned it. Safe to call again if setup is abandoned partway through;
+// it simply overwrites the previous pending secret.
+app.post('/auth/totp/setup', requireRole('admin'), async (req, res) => {
+  try {
+    const secret = authenticator.generateSecret();
+    await pool.query('UPDATE admins SET totp_secret = $1 WHERE id = $2', [secret, req.user.sub]);
+    res.json({
+      secret,
+      otpauthUrl: authenticator.keyuri(req.user.username, TOTP_ISSUER, secret),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong starting MFA setup.' });
+  }
+});
+
+// Step 2: the admin submits the current 6-digit code from their
+// authenticator app, proving they actually scanned the secret from step
+// 1 rather than it just sitting unused in the database. Only on success
+// does totp_enabled flip true (POST /auth/login starts requiring a code
+// from this point on) and a fresh batch of recovery codes is issued --
+// shown ONCE in this response, exactly like the generated admin
+// password/PIN from GET /admin/bootstrap; only their bcrypt hashes are
+// kept server-side.
+app.post('/auth/totp/enable', requireRole('admin'), async (req, res) => {
+  const { totpCode } = req.body;
+  if (!totpCode) {
+    return res.status(400).json({ error: 'Request must include "totpCode".' });
+  }
+  try {
+    const result = await pool.query('SELECT totp_secret FROM admins WHERE id = $1', [req.user.sub]);
+    const secret = result.rows[0] && result.rows[0].totp_secret;
+    if (!secret) {
+      return res.status(400).json({ error: 'Call POST /auth/totp/setup first to generate a secret.' });
+    }
+    if (!authenticator.check(totpCode, secret)) {
+      return res.status(401).json({ error: 'Invalid authentication code.' });
+    }
+    const recoveryCodes = await issueRecoveryCodes(req.user.sub);
+    await pool.query('UPDATE admins SET totp_enabled = true WHERE id = $1', [req.user.sub]);
+    res.json({
+      enabled: true,
+      recoveryCodes,
+      note: 'Save these recovery codes now -- they will not be shown again. Each one works once, in place of a code from your authenticator app, if you lose access to it.',
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong enabling MFA.' });
+  }
+});
+
+// Turns MFA off. Requires the account's own current password + PIN
+// rather than a totpCode, deliberately -- an admin who has already lost
+// their authenticator device AND used up their recovery codes must still
+// be able to turn MFA off using the same two factors that get them into
+// the account in the first place, rather than being locked out entirely.
+app.post('/auth/totp/disable', requireRole('admin'), async (req, res) => {
+  const { password, pin } = req.body;
+  if (!password || !pin) {
+    return res.status(400).json({ error: 'Request must include "password" and "pin".' });
+  }
+  try {
+    const result = await pool.query('SELECT password_hash, pin_hash FROM admins WHERE id = $1', [req.user.sub]);
+    const admin = result.rows[0];
+    const [passwordOk, pinOk] = await Promise.all([
+      bcrypt.compare(password, admin.password_hash),
+      bcrypt.compare(pin, admin.pin_hash),
+    ]);
+    if (!passwordOk || !pinOk) {
+      return res.status(401).json({ error: 'Invalid password or PIN.' });
+    }
+    await pool.query('UPDATE admins SET totp_enabled = false, totp_secret = NULL WHERE id = $1', [req.user.sub]);
+    await pool.query('DELETE FROM totp_recovery_codes WHERE admin_id = $1', [req.user.sub]);
+    res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong disabling MFA.' });
+  }
+});
+
+// Invalidates every existing recovery code and issues a fresh batch --
+// for after one gets used, or just periodically. Same password+PIN
+// re-authentication as disable, for the same reason.
+app.post('/auth/totp/recovery-codes/regenerate', requireRole('admin'), async (req, res) => {
+  const { password, pin } = req.body;
+  if (!password || !pin) {
+    return res.status(400).json({ error: 'Request must include "password" and "pin".' });
+  }
+  try {
+    const result = await pool.query(
+      'SELECT password_hash, pin_hash, totp_enabled FROM admins WHERE id = $1',
+      [req.user.sub]
+    );
+    const admin = result.rows[0];
+    const [passwordOk, pinOk] = await Promise.all([
+      bcrypt.compare(password, admin.password_hash),
+      bcrypt.compare(pin, admin.pin_hash),
+    ]);
+    if (!passwordOk || !pinOk) {
+      return res.status(401).json({ error: 'Invalid password or PIN.' });
+    }
+    if (!admin.totp_enabled) {
+      return res.status(400).json({ error: 'MFA is not enabled on this account.' });
+    }
+    const recoveryCodes = await issueRecoveryCodes(req.user.sub);
+    res.json({ recoveryCodes, note: 'Save these now -- the old codes no longer work.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong regenerating recovery codes.' });
   }
 });
 
