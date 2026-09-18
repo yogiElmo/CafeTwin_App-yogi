@@ -6,6 +6,7 @@ import '../services/auth_service.dart';
 import '../state/cafe_state.dart';
 import 'home_shell.dart';
 import 'login_screen.dart';
+import 'mfa_setup_screen.dart';
 import 'setup_screen.dart';
 
 /// Post-login landing page for admins: lists every organization this admin
@@ -30,6 +31,12 @@ import 'setup_screen.dart';
 /// admin who is sitting on this list -- either right after login or right
 /// after logging off an organization -- always has a way to sign out
 /// completely without first having to open one.
+///
+/// Next to it sits a "Multi-Factor Authentication" action opening
+/// [MfaSetupScreen], mirroring [HomeShell]'s. MFA is an account-level
+/// setting rather than an organization-level one, so requiring an admin to
+/// first open some arbitrary organization just to reach it would be
+/// backwards -- this is the screen they land on straight after login.
 class OrganizationListScreen extends StatefulWidget {
   const OrganizationListScreen({
     super.key,
@@ -119,6 +126,19 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
         ),
       ),
       (Route<dynamic> route) => false,
+    );
+  }
+
+  /// Deliberately a plain `push`, not the `pushReplacement` every other
+  /// navigation out of this screen uses: MFA setup is a side trip the admin
+  /// comes back from, and it never touches [CafeState], so the one-shot
+  /// configure/load constraint that forces `pushReplacement` elsewhere
+  /// doesn't apply here.
+  void _openMfaSetup() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => const MfaSetupScreen(),
+      ),
     );
   }
 
@@ -322,6 +342,16 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
         automaticallyImplyLeading: false,
         title: const Text('Your Organizations'),
         actions: <Widget>[
+          // Staff never reach this screen (they go straight to
+          // SetupScreen -- see the class doc), so this guard is belt and
+          // braces; it keeps the control consistent with HomeShell's and
+          // safe if routing ever changes.
+          if (AuthService.isAdmin)
+            IconButton(
+              icon: const Icon(Icons.security_outlined),
+              tooltip: 'Multi-Factor Authentication',
+              onPressed: _openMfaSetup,
+            ),
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Logout',
