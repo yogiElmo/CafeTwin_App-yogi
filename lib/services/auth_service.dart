@@ -353,8 +353,19 @@ class AuthService {
   static Future<Map<String, dynamic>?> getOrganization(String id) async {
     if (!ApiService.isEnabled) return null;
     try {
+      // MUST send auth headers. This endpoint was unauthenticated until
+      // the organization reads were locked down, and this call was the
+      // one place that relied on that -- it went out bare and started
+      // coming back 401 the moment the server began requiring
+      // credentials, which surfaced as "Could not open your organization.
+      // Check the backend connection." Every call that talks to the
+      // backend goes through ApiService.authHeaders so a change like that
+      // can never single one out again.
       final http.Response resp = await http
-          .get(Uri.parse('${ApiService.baseUrl}/organizations/$id'))
+          .get(
+            Uri.parse('${ApiService.baseUrl}/organizations/$id'),
+            headers: ApiService.authHeaders,
+          )
           .timeout(const Duration(seconds: 8));
       if (resp.statusCode == 200) {
         return jsonDecode(resp.body) as Map<String, dynamic>;
