@@ -109,6 +109,20 @@ class _LoginScreenState extends State<LoginScreen> {
   /// deleted after the account was made, which sets `organization_id` to
   /// NULL -- gets a plain explanation rather than a broken screen.
   Future<void> _goToNextScreen() async {
+    // Clear whatever the PREVIOUS account left loaded, before routing.
+    //
+    // [CafeState.loadExisting] and [CafeState.configure] are both one-shot:
+    // each returns early once `_isConfigured` is true. Logging out
+    // deliberately does not reset [CafeState], so without this a second
+    // login on the same app instance silently kept the first account's
+    // café -- every staff member landed in whichever organization happened
+    // to be opened first, whatever they were actually assigned.
+    //
+    // This is about isolation as much as correctness: on a shared café
+    // terminal, one staff member must not see the previous one's
+    // organization name and station roster.
+    widget.state.reset();
+
     if (AuthService.isAdmin) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(

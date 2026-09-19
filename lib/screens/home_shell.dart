@@ -13,10 +13,10 @@ import 'user_management_screen.dart';
 /// Root scaffold: AppBar + BottomNavigationBar (Stations | Simulation | Alerts).
 /// The Alerts tab carries a red badge with the unacknowledged alert count.
 ///
-/// The AppBar also carries an admin-only "Manage Users" action, an
-/// admin-only "Multi-Factor Authentication" action (opens
-/// [MfaSetupScreen]), an admin-only "Log Off Organization" action, and a
-/// logout button.
+/// The AppBar also carries an admin-only "Manage Users" action, a
+/// "Multi-Factor Authentication" action open to every account (opens
+/// [MfaSetupScreen] -- each account manages only its own MFA), an
+/// admin-only "Log Off Organization" action, and a logout button.
 ///
 /// "Log Off Organization" is distinct from "Logout": it stays signed in to
 /// the same admin account but returns to [OrganizationListScreen] so a
@@ -25,10 +25,11 @@ import 'user_management_screen.dart';
 /// otherwise safe to configure/load only once per instance.
 ///
 /// "Logout" clears the stored session entirely and returns to
-/// [LoginScreen], but does not reset [CafeState] (organization setup is
-/// purely in-memory for this browser session; see the README's note on
-/// what "multi-user" means here). It asks for confirmation first and, once
-/// [LoginScreen] loads, shows a one-time "You have been logged out."
+/// [LoginScreen]. It now also resets [CafeState]: because loading an
+/// organization is one-shot per instance, leaving it configured meant the
+/// next account to sign in on this device silently inherited the previous
+/// one's café instead of their own. It asks for confirmation first and,
+/// once [LoginScreen] loads, shows a one-time "You have been logged out."
 /// snackbar so there's clear feedback that it actually happened.
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, required this.state});
@@ -65,6 +66,12 @@ class _HomeShellState extends State<HomeShell> {
     if (confirmed != true) return;
 
     await AuthService.logout();
+    // Drop the loaded organization too. CafeState is one-shot, so leaving
+    // it configured meant the NEXT account to log in on this device
+    // inherited this one's café instead of their own. LoginScreen resets
+    // again on the way in; doing it here as well means a logged-out
+    // terminal isn't sitting on the previous user's data.
+    widget.state.reset();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(

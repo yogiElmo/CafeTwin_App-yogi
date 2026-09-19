@@ -15,8 +15,10 @@ import 'setup_screen.dart';
 /// (`GET /organizations/:id`) and loads it into [CafeState] via
 /// [CafeState.loadExisting] instead of creating a new one.
 ///
-/// Non-admin (staff) logins skip this screen entirely and go straight to
-/// [SetupScreen], same as before this screen existed -- see [LoginScreen].
+/// Non-admin (staff) logins never reach this screen: a staff account is
+/// assigned to exactly one café by an admin, so [LoginScreen] takes them
+/// straight into it. They have no organization to choose between and no
+/// permission to create one.
 ///
 /// Every navigation out of this screen uses `pushReplacement`. Opening or
 /// creating an organization is otherwise one-shot per [CafeState] instance
@@ -117,6 +119,9 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
     if (confirmed != true) return;
 
     await AuthService.logout();
+    // Same reasoning as HomeShell's logout: don't leave this account's
+    // café loaded for whoever logs in next on this device.
+    widget.state.reset();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(
@@ -182,6 +187,12 @@ class _OrganizationListScreenState extends State<OrganizationListScreen> {
         .map((dynamic s) => Station.fromJson(s as Map<String, dynamic>))
         .toList();
 
+    // Reset first: loadExisting is one-shot and returns silently if the
+    // state is already configured, which would open the previously-loaded
+    // café instead of this one. Callers are supposed to have reset
+    // already, but keeping the invariant here means a new entry path
+    // can't reintroduce that bug.
+    widget.state.reset();
     widget.state.loadExisting(
       organizationId: org.id,
       company: detail['name'] as String? ?? org.name,
