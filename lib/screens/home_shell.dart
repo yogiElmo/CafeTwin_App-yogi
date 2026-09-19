@@ -125,12 +125,16 @@ class _HomeShellState extends State<HomeShell> {
                   tooltip: 'Manage Users',
                   onPressed: _openUserManagement,
                 ),
-              if (AuthService.isAdmin)
-                IconButton(
-                  icon: const Icon(Icons.security_outlined),
-                  tooltip: 'Multi-Factor Authentication',
-                  onPressed: _openMfaSetup,
-                ),
+              // Deliberately NOT admin-gated: MFA is open to staff too,
+              // and every /auth/totp/* route is scoped to the caller's own
+              // account, so a staff member can only manage their own.
+              // Available, never mandatory -- a shared till account simply
+              // leaves it off.
+              IconButton(
+                icon: const Icon(Icons.security_outlined),
+                tooltip: 'Multi-Factor Authentication',
+                onPressed: _openMfaSetup,
+              ),
               if (AuthService.isAdmin)
                 IconButton(
                   icon: const Icon(Icons.swap_horiz),

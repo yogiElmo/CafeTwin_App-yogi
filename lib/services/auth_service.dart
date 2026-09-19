@@ -75,6 +75,17 @@ class AuthService {
   static const String _tokenKey = 'cafetwin_jwt';
   static const String _roleKey = 'cafetwin_role';
   static const String _usernameKey = 'cafetwin_username';
+  static const String _organizationIdKey = 'cafetwin_organization_id';
+
+  /// Organization a STAFF account is assigned to, as returned by
+  /// `POST /auth/login`. Null for admins, who pick from their own list
+  /// instead of belonging to one café.
+  ///
+  /// Cached purely so the app knows where to send the user; it is NOT the
+  /// access control. The backend re-reads the assignment from the database
+  /// on every request (`orgAccessError` in server.js), so tampering with
+  /// this value client-side gains nothing.
+  static String? _currentOrganizationId;
 
   /// Role of the currently logged-in user (`'admin'` or `'staff'`), kept in
   /// memory once set by [login]/[restoreSession] so UI code (e.g.
@@ -105,6 +116,11 @@ class AuthService {
   /// logins (no backend configured) are always treated as admin, since
   /// there is no real account/role behind them.
   static bool get isAdmin => _currentRole == 'admin';
+
+  /// Organization this account is assigned to, or null for an admin (and
+  /// for a staff account whose organization has since been deleted, which
+  /// the backend treats as "can read nothing" until reassigned).
+  static String? get currentOrganizationId => _currentOrganizationId;
 
   /// Attempts to log in with the given credentials.
   ///
@@ -154,12 +170,23 @@ class AuthService {
         }
         final String role = body['role'] as String? ?? 'admin';
         final String loggedInUsername = body['username'] as String? ?? username;
+        final String? organizationId = body['organizationId'] as String?;
         await _storage.write(key: _tokenKey, value: token);
         await _storage.write(key: _roleKey, value: role);
         await _storage.write(key: _usernameKey, value: loggedInUsername);
+        // Delete rather than write null -- flutter_secure_storage treats a
+        // null value as a delete on some platforms and throws on others,
+        // and an admin must not inherit a stale org from a previous staff
+        // login on a shared browser profile.
+        if (organizationId == null) {
+          await _storage.delete(key: _organizationIdKey);
+        } else {
+          await _storage.write(key: _organizationIdKey, value: organizationId);
+        }
         ApiService.setAuthToken(token);
         _currentRole = role;
         _currentUsername = loggedInUsername;
+        _currentOrganizationId = organizationId;
         return const LoginResult();
       }
       if (resp.statusCode == 401) {
@@ -213,6 +240,9 @@ class AuthService {
       // No backend, so no real role -- treat the one demo account as admin.
       _currentRole = 'admin';
       _currentUsername = username;
+      // Offline demo has no backend and therefore no organization
+      // assignment -- it behaves as an admin, who has none by design.
+      _currentOrganizationId = null;
     }
     return ok
         ? const LoginResult()
@@ -237,6 +267,7 @@ class AuthService {
     ApiService.setAuthToken(token);
     _currentRole = await _storage.read(key: _roleKey) ?? 'admin';
     _currentUsername = await _storage.read(key: _usernameKey);
+    _currentOrganizationId = await _storage.read(key: _organizationIdKey);
     return true;
   }
 
@@ -270,9 +301,11 @@ class AuthService {
     await _storage.delete(key: _tokenKey);
     await _storage.delete(key: _roleKey);
     await _storage.delete(key: _usernameKey);
+    await _storage.delete(key: _organizationIdKey);
     ApiService.setAuthToken(null);
     _currentRole = null;
     _currentUsername = null;
+    _currentOrganizationId = null;
   }
 
   /// Lists organizations the currently logged-in admin has created.
@@ -429,11 +462,15 @@ class AuthService {
   /// Creates a new login account. Returns null on success, or a short
   /// user-facing error message on failure (bad input, duplicate username,
   /// not authorized, or the backend being unreachable).
+  /// [organizationId] is required when [role] is `'staff'` -- a staff
+  /// account belongs to exactly one café, and the backend rejects the
+  /// request without it. Admins take none.
   static Future<String?> createUser({
     required String username,
     required String password,
     required String pin,
     required String role,
+    String? organizationId,
   }) async {
     if (!ApiService.isEnabled) {
       return 'No backend is configured (API_BASE_URL not set).';
@@ -443,11 +480,12 @@ class AuthService {
           .post(
             Uri.parse('${ApiService.baseUrl}/admin/users'),
             headers: ApiService.authHeaders,
-            body: jsonEncode(<String, String>{
+            body: jsonEncode(<String, dynamic>{
               'username': username,
               'password': password,
               'pin': pin,
               'role': role,
+              if (organizationId != null) 'organizationId': organizationId,
             }),
           )
           .timeout(const Duration(seconds: 8));

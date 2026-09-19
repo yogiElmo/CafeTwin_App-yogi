@@ -146,29 +146,69 @@ backend-free demo, pass `--dart-define=DEMO_USERNAME=...
 --dart-define=DEMO_PASSWORD=... --dart-define=DEMO_PIN=...` at build/run
 time instead of hardcoding anything in source.
 
-### 7. Multi-factor authentication (admin accounts only)
+### 7. Multi-factor authentication (any account, opt-in)
 
-Any admin can turn on TOTP -- the same open standard (RFC 6238) Google
+Any account can turn on TOTP -- the same open standard (RFC 6238) Google
 Authenticator, Microsoft Authenticator, Authy, and 1Password all speak,
 so there's nothing vendor-specific to configure. From the app: log in,
-then the shield icon in the top app bar (admin-only, next to "Manage
-Users") opens setup -- it shows a QR code and a manual-entry secret,
-confirms with one code from the app, then shows 8 one-time recovery
-codes (save these; they're not shown again). From then on,
-`POST /auth/login` requires a `totpCode` in the request body for that
-account, on top of the existing password + PIN.
+then the shield icon in the top app bar opens setup -- it shows a QR code
+and a manual-entry secret, confirms with one code from the app, then
+shows 8 one-time recovery codes (save these; they're not shown again).
+From then on, `POST /auth/login` requires a `totpCode` in the request
+body for that account, on top of the existing password + PIN.
 
-Deliberately scoped to admins, not staff: staff accounts share terminals
-on the café floor, where a second factor is friction with no real
-security payoff, while an admin account can create, delete, and manage
-every other account -- see `cafetwin_backend_devops/server.js`'s "TOTP
-MULTI-FACTOR AUTHENTICATION" section and the schema comment on
-`admins.totp_enabled` in `init.sql` for the full reasoning. No new
-environment variables or secrets are needed; `init.sql` adds the
+Available to both roles, mandatory for neither. It was originally
+admin-only, on the reasoning that café-floor terminals are shared and a
+second factor there is friction with no real payoff. That argues against
+*forcing* MFA on staff, not against offering it: a staff member with
+their own phone gains as much from it as an admin does, and a shared till
+account simply never turns it on. Every `/auth/totp/*` route is scoped to
+the caller's own account, so nobody -- an admin included -- can enable,
+disable or inspect anyone else's MFA. Turning it off still requires that
+account's own password and PIN rather than a code, so a lost device plus
+spent recovery codes can't lock someone out permanently.
+
+No new environment variables or secrets are needed; `init.sql` adds the
 required columns/table automatically (same `ADD COLUMN IF NOT EXISTS`
 pattern the rest of the schema uses), so this works on a fresh database
 and picks up automatically the next time `GET /admin/bootstrap` runs
 against an existing one.
+
+### 8. Roles: what an admin can do that staff cannot
+
+Two roles share the `admins` table, separated by its `role` column.
+
+**Admins** create organizations, manage accounts (`/admin/users`), and
+see only the cafés they created -- `GET /organizations` is scoped by
+`organizations.created_by`, so one admin never sees another's.
+
+**Staff** belong to exactly one café, recorded in `admins.organization_id`
+and chosen by the admin at the moment the account is created. A staff
+account cannot create an organization, and cannot read any organization
+other than its own. On login they go straight into their assigned café
+rather than being offered a chooser or a setup form.
+
+Enforcement lives in `orgAccessError` in `server.js`, which re-reads the
+role and assignment from the database on every request rather than
+trusting the JWT's copy -- so reassigning or removing a staff member
+takes effect on their next request, not whenever their 8-hour token
+happens to expire. Hiding buttons in the app is a convenience layered on
+top of that, never the control itself.
+
+One consequence worth knowing when deploying: the organization read
+endpoints (`GET /organizations/:id`, `/organizations/:orgId/alerts`,
+`/organizations/:orgId/report-entries`, `/stations/:id/telemetry`) used
+to be entirely unauthenticated -- anyone holding a UUID could read a
+café's stations, alerts and telemetry. They now follow the same rule the
+write gate has always used: anonymous callers pass only when `API_KEY` is
+unset (the zero-config local-dev default), and are rejected once it is
+set. Render's blueprint generates an `API_KEY`, so they are closed in the
+deployed environment. This affects *anonymous* callers only -- a
+logged-in staff member is scoped to their own café either way.
+
+Practical ordering note: assigning staff to a café needs at least one
+organization to exist, so create the organization before creating the
+staff accounts for it.
 
 ## Notes / things left as-is on purpose
 

@@ -160,14 +160,128 @@ function requireRole(role) {
 
 // Same as requireRole, but for endpoints any logged-in account (admin or
 // staff) may use on their OWN behalf -- viewing/revoking their own auth
-// sessions. A service-account x-api-key never satisfies this either, since
-// there is no account behind it to scope "own sessions" to.
+// sessions, managing their own MFA. A service-account x-api-key never
+// satisfies this either, since there is no account behind it to scope
+// "own sessions" to.
 async function requireAnyUser(req, res, next) {
   const auth = await authenticateBearer(req);
   if (auth.error) return res.status(auth.error).json({ error: auth.message });
   req.user = auth.decoded;
   touchSession(auth.decoded.jti);
   next();
+}
+
+// For POST /organizations. Creating a café is an ADMIN action: staff are
+// assigned to exactly one organization by an admin and must never be able
+// to make their own. But this endpoint also has a legitimate non-human
+// caller -- simulate.js seeds demo data through the legacy x-api-key path
+// -- and requireRole('admin') would lock that out, since a service key has
+// no role attached. So: a Bearer token must carry role 'admin', while a
+// valid x-api-key is still accepted as a service caller.
+//
+// The `!API_KEY` escape hatch mirrors requireAuth's: with no API_KEY
+// configured (the default for local development) an unauthenticated caller
+// is let through, exactly as it was before this guard existed. A staff
+// Bearer token is still rejected either way -- the token branch is checked
+// first, so having a login never *lowers* what you are allowed to do.
+async function requireAdminOrService(req, res, next) {
+  const authHeader = req.get('authorization') || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const auth = await authenticateBearer(req);
+    if (auth.error) return res.status(auth.error).json({ error: auth.message });
+    if (auth.decoded.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Only an admin can create an organization. Staff accounts are '
+          + 'assigned to one by an admin.',
+      });
+    }
+    req.user = auth.decoded;
+    touchSession(auth.decoded.jti);
+    return next();
+  }
+  if (!process.env.API_KEY) return next();
+  if (req.get('x-api-key') === process.env.API_KEY) return next();
+  return res.status(401).json({ error: 'Missing or invalid credentials (Bearer token or x-api-key).' });
+}
+
+// Attaches req.user when a Bearer token is present, accepts a service
+// x-api-key with no user attached, and rejects anything else. Used to put
+// a door on the organization READ endpoints, which were plain GETs with no
+// guard at all -- the global gate above only covers write methods, so
+// anyone holding an organization's UUID could read its name, stations,
+// alerts and report entries without logging in.
+async function requireAnyUserOrService(req, res, next) {
+  const authHeader = req.get('authorization') || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const auth = await authenticateBearer(req);
+    if (auth.error) return res.status(auth.error).json({ error: auth.message });
+    req.user = auth.decoded;
+    touchSession(auth.decoded.jti);
+    return next();
+  }
+  if (!process.env.API_KEY) return next();
+  if (req.get('x-api-key') === process.env.API_KEY) return next();
+  return res.status(401).json({ error: 'Missing or invalid credentials (Bearer token or x-api-key).' });
+}
+
+// Single place that answers "may this caller touch this organization?".
+// Returns null when allowed, or { status, error } to send back.
+//
+//   service caller (no req.user) -> everything; simulate.js and other
+//       machine callers hold the shared secret and are trusted by it.
+//   staff  -> only the organization on their own admins row. A staff
+//       account whose organization was deleted (organization_id is now
+//       NULL) can read nothing until an admin reassigns it.
+//   admin  -> only organizations they created. Organizations with a NULL
+//       created_by are also allowed: those predate the created_by column
+//       or were seeded through the x-api-key path, and blocking them would
+//       hide existing demo data from every admin.
+//
+// Deliberately re-reads role and organization_id from the database rather
+// than trusting the JWT's copy, so revoking or reassigning a staff member
+// takes effect on their next request instead of whenever their 8-hour
+// token happens to expire.
+async function orgAccessError(req, organizationId) {
+  if (!req.user) return null;
+  if (!organizationId) return { status: 404, error: 'Organization not found.' };
+
+  const accountResult = await pool.query(
+    'SELECT role, organization_id FROM admins WHERE id = $1',
+    [req.user.sub]
+  );
+  const account = accountResult.rows[0];
+  if (!account) return { status: 401, error: 'That account no longer exists.' };
+
+  if (account.role === 'staff') {
+    if (!account.organization_id || account.organization_id !== organizationId) {
+      return { status: 403, error: 'Your account is not assigned to this organization.' };
+    }
+    return null;
+  }
+
+  const orgResult = await pool.query(
+    'SELECT created_by FROM organizations WHERE id = $1',
+    [organizationId]
+  );
+  if (orgResult.rows.length === 0) return { status: 404, error: 'Organization not found.' };
+  const createdBy = orgResult.rows[0].created_by;
+  if (createdBy && createdBy !== req.user.sub) {
+    return { status: 403, error: 'That organization belongs to another admin.' };
+  }
+  return null;
+}
+
+// Same check, for the station-scoped routes: resolves the station to its
+// organization first. A station id that does not exist is reported as 404
+// rather than 403, since there is no organization to be denied access to.
+async function stationOrgAccessError(req, stationId) {
+  if (!req.user) return null;
+  const result = await pool.query(
+    'SELECT organization_id FROM stations WHERE id = $1',
+    [stationId]
+  );
+  if (result.rows.length === 0) return { status: 404, error: 'Station not found.' };
+  return orgAccessError(req, result.rows[0].organization_id);
 }
 
 // --- Database ------------------------------------------------------------
@@ -254,7 +368,19 @@ app.post('/auth/login', loginLimiter, async (req, res) => {
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
-    res.json({ token, expiresIn: JWT_EXPIRES_IN, role: admin.role, username: admin.username });
+    // organizationId is null for admins (they pick from their own list on
+    // the next screen) and set for staff, who go straight into the one café
+    // they are assigned to instead of being offered a chooser or a setup
+    // form. The server still re-checks this on every request -- see
+    // orgAccessError -- so the client is being told where to go, not being
+    // trusted to decide what it may see.
+    res.json({
+      token,
+      expiresIn: JWT_EXPIRES_IN,
+      role: admin.role,
+      username: admin.username,
+      organizationId: admin.organization_id || null,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong during login.' });
@@ -340,7 +466,7 @@ app.post('/auth/logout', requireAnyUser, async (req, res) => {
 });
 
 // ============================================================
-// TOTP MULTI-FACTOR AUTHENTICATION (admin accounts only)
+// TOTP MULTI-FACTOR AUTHENTICATION (any account, opt-in)
 // ============================================================
 // Google Authenticator, Microsoft Authenticator, Authy, 1Password, etc.
 // are all just client apps for the same open standard -- TOTP, RFC 6238
@@ -352,11 +478,22 @@ app.post('/auth/logout', requireAnyUser, async (req, res) => {
 // checks with `authenticator.check`. No external account, API key, or
 // network call to either company is involved.
 //
-// Scoped to the `admin` role by design (see the gap-analysis report's
-// recommendation): staff share terminals on the café floor, where a
-// second factor is friction with no real payoff, while an admin account
-// can create, delete, and manage every other account -- that's where a
-// stolen password+PIN actually hurts.
+// Open to BOTH roles (requireAnyUser), and mandatory for neither. These
+// routes were originally admin-only, on the reasoning that café-floor
+// terminals are shared and a second factor there is friction with no real
+// payoff. That reasoning holds against *forcing* MFA on staff -- it does
+// not hold against letting them have it: a staff member with their own
+// phone gains exactly as much from a second factor as an admin does, and
+// a shared till account simply never turns it on.
+//
+// Every route below scopes to req.user.sub, so each account manages only
+// its own MFA. An admin cannot enable, disable, or read the MFA state of
+// anyone else's account through these -- turning MFA off still requires
+// that account's own password and PIN.
+//
+// What remains admin-only is the damage a compromised account can do:
+// creating, deleting and reassigning accounts. That is an argument for
+// admins to switch MFA on, not for denying it to staff.
 
 const TOTP_ISSUER = 'CaféTwin';
 
@@ -414,7 +551,7 @@ async function tryConsumeRecoveryCode(adminId, code) {
 // Whether the calling admin currently has MFA enabled -- lets the
 // Flutter security screen show the right state (and the right button:
 // "Set up MFA" vs "Turn off MFA") without guessing.
-app.get('/auth/totp/status', requireRole('admin'), async (req, res) => {
+app.get('/auth/totp/status', requireAnyUser, async (req, res) => {
   try {
     const result = await pool.query('SELECT totp_enabled FROM admins WHERE id = $1', [req.user.sub]);
     res.json({ enabled: result.rows[0] ? result.rows[0].totp_enabled : false });
@@ -430,7 +567,7 @@ app.get('/auth/totp/status', requireRole('admin'), async (req, res) => {
 // happens once POST /auth/totp/enable confirms the admin actually
 // scanned it. Safe to call again if setup is abandoned partway through;
 // it simply overwrites the previous pending secret.
-app.post('/auth/totp/setup', requireRole('admin'), async (req, res) => {
+app.post('/auth/totp/setup', requireAnyUser, async (req, res) => {
   try {
     const secret = authenticator.generateSecret();
     await pool.query('UPDATE admins SET totp_secret = $1 WHERE id = $2', [secret, req.user.sub]);
@@ -452,7 +589,7 @@ app.post('/auth/totp/setup', requireRole('admin'), async (req, res) => {
 // shown ONCE in this response, exactly like the generated admin
 // password/PIN from GET /admin/bootstrap; only their bcrypt hashes are
 // kept server-side.
-app.post('/auth/totp/enable', requireRole('admin'), async (req, res) => {
+app.post('/auth/totp/enable', requireAnyUser, async (req, res) => {
   const { totpCode } = req.body;
   if (!totpCode) {
     return res.status(400).json({ error: 'Request must include "totpCode".' });
@@ -484,7 +621,7 @@ app.post('/auth/totp/enable', requireRole('admin'), async (req, res) => {
 // their authenticator device AND used up their recovery codes must still
 // be able to turn MFA off using the same two factors that get them into
 // the account in the first place, rather than being locked out entirely.
-app.post('/auth/totp/disable', requireRole('admin'), async (req, res) => {
+app.post('/auth/totp/disable', requireAnyUser, async (req, res) => {
   const { password, pin } = req.body;
   if (!password || !pin) {
     return res.status(400).json({ error: 'Request must include "password" and "pin".' });
@@ -511,7 +648,7 @@ app.post('/auth/totp/disable', requireRole('admin'), async (req, res) => {
 // Invalidates every existing recovery code and issues a fresh batch --
 // for after one gets used, or just periodically. Same password+PIN
 // re-authentication as disable, for the same reason.
-app.post('/auth/totp/recovery-codes/regenerate', requireRole('admin'), async (req, res) => {
+app.post('/auth/totp/recovery-codes/regenerate', requireAnyUser, async (req, res) => {
   const { password, pin } = req.body;
   if (!password || !pin) {
     return res.status(400).json({ error: 'Request must include "password" and "pin".' });
@@ -615,7 +752,10 @@ app.get('/admin/bootstrap', async (req, res) => {
 app.get('/admin/users', requireRole('admin'), async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT username, role, created_at FROM admins ORDER BY created_at ASC'
+      `SELECT a.username, a.role, a.created_at, a.organization_id, o.name AS organization_name
+       FROM admins a
+       LEFT JOIN organizations o ON o.id = a.organization_id
+       ORDER BY a.created_at ASC`
     );
     res.json(result.rows);
   } catch (err) {
@@ -624,22 +764,48 @@ app.get('/admin/users', requireRole('admin'), async (req, res) => {
   }
 });
 
+// A staff account MUST name the organization it belongs to, and that
+// organization must be one this admin created -- otherwise an admin could
+// park staff inside a café belonging to someone else. Admin accounts take
+// no organization: they are scoped by what they create, not by membership
+// (see the organization_id comment in init.sql).
 app.post('/admin/users', requireRole('admin'), async (req, res) => {
-  const { username, password, pin, role = 'staff' } = req.body;
+  const { username, password, pin, role = 'staff', organizationId = null } = req.body;
   if (!username || !password || !pin) {
     return res.status(400).json({ error: 'Request must include "username", "password" and "pin".' });
   }
   if (!['admin', 'staff'].includes(role)) {
     return res.status(400).json({ error: '"role" must be "admin" or "staff".' });
   }
+  if (role === 'staff' && !organizationId) {
+    return res.status(400).json({
+      error: 'A staff account must include "organizationId" -- the organization it is assigned to.',
+    });
+  }
   try {
+    let assignedOrganizationId = null;
+    if (role === 'staff') {
+      const orgResult = await pool.query(
+        'SELECT created_by FROM organizations WHERE id = $1',
+        [organizationId]
+      );
+      if (orgResult.rows.length === 0) {
+        return res.status(404).json({ error: 'That organization does not exist.' });
+      }
+      const createdBy = orgResult.rows[0].created_by;
+      if (createdBy && createdBy !== req.user.sub) {
+        return res.status(403).json({ error: 'That organization belongs to another admin.' });
+      }
+      assignedOrganizationId = organizationId;
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
     const pinHash = await bcrypt.hash(pin, 12);
     const result = await pool.query(
-      `INSERT INTO admins (username, password_hash, pin_hash, role)
-       VALUES ($1, $2, $3, $4)
-       RETURNING username, role, created_at`,
-      [username, passwordHash, pinHash, role]
+      `INSERT INTO admins (username, password_hash, pin_hash, role, organization_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING username, role, organization_id, created_at`,
+      [username, passwordHash, pinHash, role, assignedOrganizationId]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -705,7 +871,10 @@ app.get('/organizations', requireRole('admin'), async (req, res) => {
   }
 });
 
-app.post('/organizations', async (req, res) => {
+// Admin-or-service only. Staff are assigned to an organization by an
+// admin; they must not be able to create their own -- see
+// requireAdminOrService for why this is not just requireRole('admin').
+app.post('/organizations', requireAdminOrService, async (req, res) => {
   const { name, stations } = req.body;
   if (!name || !Array.isArray(stations) || stations.length === 0) {
     return res.status(400).json({ error: 'Request must include "name" and a non-empty "stations" array.' });
@@ -748,9 +917,15 @@ app.post('/organizations', async (req, res) => {
   }
 });
 
-app.get('/organizations/:id', async (req, res) => {
+// Reading one organization is now gated: previously this was an
+// unauthenticated GET, so anyone holding the UUID could pull its name and
+// station list. Staff get only their assigned café, admins only their own.
+app.get('/organizations/:id', requireAnyUserOrService, async (req, res) => {
   const { id } = req.params;
   try {
+    const denied = await orgAccessError(req, id);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const orgResult = await pool.query(
       'SELECT id, name, configured_at FROM organizations WHERE id = $1',
       [id]
@@ -824,10 +999,13 @@ app.post('/stations/:stationId/telemetry', async (req, res) => {
   }
 });
 
-app.get('/stations/:stationId/telemetry', async (req, res) => {
+app.get('/stations/:stationId/telemetry', requireAnyUserOrService, async (req, res) => {
   const { stationId } = req.params;
   const limit = Math.min(parseInt(req.query.limit) || 50, 500);
   try {
+    const denied = await stationOrgAccessError(req, stationId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const result = await pool.query(
       `SELECT * FROM telemetry WHERE station_id = $1 ORDER BY recorded_at DESC LIMIT $2`,
       [stationId, limit]
@@ -904,10 +1082,13 @@ app.post('/stations/:stationId/alerts/:ruleCode/resolve', async (req, res) => {
   }
 });
 
-app.get('/organizations/:orgId/alerts', async (req, res) => {
+app.get('/organizations/:orgId/alerts', requireAnyUserOrService, async (req, res) => {
   const { orgId } = req.params;
   const activeOnly = req.query.active === 'true';
   try {
+    const denied = await orgAccessError(req, orgId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const result = await pool.query(
       `SELECT a.* FROM alerts a
        JOIN stations s ON a.station_id = s.id
@@ -1036,9 +1217,12 @@ app.post('/organizations/:orgId/report-entries', async (req, res) => {
   }
 });
 
-app.get('/organizations/:orgId/report-entries', async (req, res) => {
+app.get('/organizations/:orgId/report-entries', requireAnyUserOrService, async (req, res) => {
   const { orgId } = req.params;
   try {
+    const denied = await orgAccessError(req, orgId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const result = await pool.query(
       `SELECT * FROM report_entries WHERE organization_id = $1 ORDER BY last_seen DESC`,
       [orgId]

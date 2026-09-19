@@ -67,7 +67,13 @@ describe('TOTP multi-factor auth (requires a live database)', () => {
     expect(res.body.enabled).toBe(false);
   });
 
-  it('is not available to a staff account', async () => {
+  // MFA used to be admin-only; it is now open to staff as well --
+  // available, never mandatory. The original reasoning (café-floor
+  // terminals are shared, so a second factor there is friction with no
+  // real payoff) argues against FORCING MFA on staff, not against offering
+  // it to a staff member who has their own device. See the TOTP section
+  // comment in server.js.
+  it('is available to a staff account as well as an admin', async () => {
     if (!dbUp) return;
     const staffLogin = await request(app).post('/auth/login').send({
       username: staffUsername,
@@ -77,7 +83,10 @@ describe('TOTP multi-factor auth (requires a live database)', () => {
     const res = await request(app)
       .post('/auth/totp/setup')
       .set('Authorization', `Bearer ${staffLogin.body.token}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    expect(typeof res.body.secret).toBe('string');
+    // Scoped to the staff member's own account, not the admin's.
+    expect(res.body.otpauthUrl).toContain(staffUsername);
   });
 
   let secret;

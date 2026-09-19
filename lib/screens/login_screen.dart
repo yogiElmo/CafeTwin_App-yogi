@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../models/station.dart';
+import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../state/cafe_state.dart';
 import '../widgets/monitor_illustration.dart';
+import 'home_shell.dart';
 import 'organization_list_screen.dart';
 import 'setup_screen.dart';
 
@@ -78,7 +80,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final bool restored = await AuthService.restoreSession();
     if (!mounted) return;
     if (restored) {
-      _goToNextScreen();
+      await _goToNextScreen();
       return;
     }
     setState(() => _checkingSession = false);
@@ -93,15 +95,78 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  /// Admins land on [OrganizationListScreen] (their own organizations,
-  /// plus the option to set up a new one); staff go straight to
-  /// [SetupScreen], same as every login before this screen existed.
-  void _goToNextScreen() {
+  /// Admins land on [OrganizationListScreen] -- their own cafés, plus the
+  /// option to set up a new one.
+  ///
+  /// Staff are assigned to exactly ONE café by an admin, so they go
+  /// straight into it. They used to be sent to [SetupScreen] instead,
+  /// which is the *create an organization* form -- the one thing a staff
+  /// account is not allowed to do. The backend now refuses it outright
+  /// (`requireAdminOrService` on `POST /organizations`); this just stops
+  /// the app walking them into a dead end.
+  ///
+  /// A staff account with no organization -- possible only if the café was
+  /// deleted after the account was made, which sets `organization_id` to
+  /// NULL -- gets a plain explanation rather than a broken screen.
+  Future<void> _goToNextScreen() async {
+    if (AuthService.isAdmin) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (BuildContext context) =>
+              OrganizationListScreen(state: widget.state),
+        ),
+      );
+      return;
+    }
+
+    // Offline demo logins have no backend and no real account behind them,
+    // so there is nothing to load -- keep the original setup flow there.
+    final String? organizationId = AuthService.currentOrganizationId;
+    if (!ApiService.isEnabled || organizationId == null) {
+      if (ApiService.isEnabled) {
+        setState(() {
+          _error = 'This staff account is not assigned to an organization. '
+              'Ask an admin to assign one.';
+          _submitting = false;
+          _checkingSession = false;
+        });
+        return;
+      }
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (BuildContext context) => SetupScreen(state: widget.state),
+        ),
+      );
+      return;
+    }
+
+    final Map<String, dynamic>? detail =
+        await AuthService.getOrganization(organizationId);
+    if (!mounted) return;
+    if (detail == null) {
+      setState(() {
+        _error = 'Could not open your organization. '
+            'Check the backend connection and try again.';
+        _submitting = false;
+        _checkingSession = false;
+      });
+      return;
+    }
+
+    final List<dynamic> stationsJson =
+        detail['stations'] as List<dynamic>? ?? <dynamic>[];
+    widget.state.loadExisting(
+      organizationId: organizationId,
+      company: detail['name'] as String? ?? 'Your café',
+      stations: stationsJson
+          .map((dynamic s) => Station.fromJson(s as Map<String, dynamic>))
+          .toList(),
+    );
+
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (BuildContext context) => AuthService.isAdmin
-            ? OrganizationListScreen(state: widget.state)
-            : SetupScreen(state: widget.state),
+        builder: (BuildContext context) => HomeShell(state: widget.state),
       ),
     );
   }
@@ -129,7 +194,7 @@ class _LoginScreenState extends State<LoginScreen> {
       });
       return;
     }
-    _goToNextScreen();
+    await _goToNextScreen();
   }
 
   InputDecoration _fieldDecoration(String label, IconData icon) {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/admin_account.dart';
+import '../models/organization_summary.dart';
 import '../services/auth_service.dart';
 
 /// Admin-only screen for managing login accounts: lists existing
@@ -24,6 +25,13 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _pinController = TextEditingController();
   String _newRole = 'staff';
+
+  /// Organizations this admin owns, offered as the assignment target when
+  /// creating a staff account. A staff member belongs to exactly one café
+  /// and the backend rejects the request without it, so the form has to
+  /// collect it rather than leaving it to a later edit.
+  List<OrganizationSummary> _organizations = <OrganizationSummary>[];
+  String? _newOrganizationId;
 
   List<AdminAccount>? _users;
   bool _loadingUsers = true;
@@ -56,6 +64,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       _listError = null;
     });
     final List<AdminAccount>? users = await AuthService.listUsers();
+    final List<OrganizationSummary>? orgs =
+        await AuthService.listMyOrganizations();
     if (!mounted) return;
     setState(() {
       _loadingUsers = false;
@@ -64,6 +74,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       } else {
         _users = users;
       }
+      _organizations = orgs ?? <OrganizationSummary>[];
+      // Drop a selection that no longer exists (organization deleted
+      // while this screen was open).
+      if (_newOrganizationId != null &&
+          !_organizations
+              .any((OrganizationSummary o) => o.id == _newOrganizationId)) {
+        _newOrganizationId = null;
+      }
     });
   }
 
@@ -71,6 +89,17 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     final String username = _usernameController.text.trim();
     final String password = _passwordController.text;
     final String pin = _pinController.text.trim();
+
+    if (_newRole == 'staff' && _newOrganizationId == null) {
+      setState(() {
+        _formError = _organizations.isEmpty
+            ? 'Create an organization first -- a staff account has to be '
+                'assigned to one.'
+            : 'Choose which organization this staff account belongs to.';
+        _formSuccess = null;
+      });
+      return;
+    }
 
     if (username.isEmpty || password.isEmpty || pin.isEmpty) {
       setState(() {
@@ -91,6 +120,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       password: password,
       pin: pin,
       role: _newRole,
+      organizationId: _newRole == 'staff' ? _newOrganizationId : null,
     );
 
     if (!mounted) return;
@@ -104,6 +134,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         _passwordController.clear();
         _pinController.clear();
         _newRole = 'staff';
+        _newOrganizationId = null;
       }
     });
 
@@ -399,6 +430,52 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                               ),
                             ],
                           ),
+                          // Only staff are assigned to a café. Admins own
+                          // the organizations they create instead, so this
+                          // picker is hidden for them rather than shown
+                          // disabled -- there is nothing for them to choose.
+                          if (_newRole == 'staff') ...<Widget>[
+                            const SizedBox(height: 12),
+                            if (_organizations.isEmpty)
+                              const Text(
+                                'No organizations yet. Create one first — a '
+                                'staff account must be assigned to exactly one.',
+                                style: TextStyle(
+                                    fontSize: 12, color: Color(0xFFCC9A48)),
+                              )
+                            else
+                              DropdownButtonFormField<String>(
+                                value: _newOrganizationId,
+                                dropdownColor: _surface,
+                                isExpanded: true,
+                                decoration: InputDecoration(
+                                  labelText: 'Assigned organization',
+                                  filled: true,
+                                  fillColor: _surface,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 4),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(color: _border),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(color: _amber),
+                                  ),
+                                ),
+                                items: _organizations
+                                    .map((OrganizationSummary org) =>
+                                        DropdownMenuItem<String>(
+                                          value: org.id,
+                                          child: Text(org.name,
+                                              overflow: TextOverflow.ellipsis),
+                                        ))
+                                    .toList(),
+                                onChanged: (String? value) {
+                                  setState(() => _newOrganizationId = value);
+                                },
+                              ),
+                          ],
                           if (_formError != null) ...<Widget>[
                             const SizedBox(height: 12),
                             Text(

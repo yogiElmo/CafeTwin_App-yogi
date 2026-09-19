@@ -43,6 +43,7 @@ describe('GET/POST /admin/users (requires a live database)', () => {
 
   let adminToken = null;
   let staffToken = null;
+  let organizationId = null;
 
   beforeAll(async () => {
     if (!dbUp) return;
@@ -66,11 +67,26 @@ describe('GET/POST /admin/users (requires a live database)', () => {
       .post('/auth/login')
       .send({ username: staffUsername, password: staffPassword, pin: staffPin });
     staffToken = staffLogin.body.token;
+
+    // A staff account must now name the organization it belongs to, so
+    // this suite needs one owned by adminUsername to create staff in.
+    // tests/staffScoping.test.js covers the rules that enforcement adds.
+    const orgRes = await request(app)
+      .post('/organizations')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        name: `admin-users-org-${Date.now()}`,
+        stations: [{ name: 'ST-01', category: 'gaming' }],
+      });
+    organizationId = orgRes.body.organizationId;
   });
 
   afterAll(async () => {
     if (!dbUp) return;
     await pool.query('DELETE FROM admins WHERE username = ANY($1)', [usersToCleanUp]);
+    if (organizationId) {
+      await pool.query('DELETE FROM organizations WHERE id = $1', [organizationId]);
+    }
   });
 
   it('rejects listing users with no token', async () => {
@@ -123,7 +139,7 @@ describe('GET/POST /admin/users (requires a live database)', () => {
     const res = await request(app)
       .post('/admin/users')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: newUsername, password: 'Whatever!23', pin: '9999' });
+      .send({ username: newUsername, password: 'Whatever!23', pin: '9999', organizationId });
     expect(res.status).toBe(201);
     expect(res.body.username).toBe(newUsername);
     expect(res.body.role).toBe('staff');
@@ -134,7 +150,7 @@ describe('GET/POST /admin/users (requires a live database)', () => {
     const res = await request(app)
       .post('/admin/users')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ username: newUsername, password: 'Whatever!23', pin: '9999' });
+      .send({ username: newUsername, password: 'Whatever!23', pin: '9999', organizationId });
     expect(res.status).toBe(409);
   });
 

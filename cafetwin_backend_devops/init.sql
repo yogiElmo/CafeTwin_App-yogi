@@ -96,19 +96,41 @@ ALTER TABLE organizations
   ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES admins(id) ON DELETE SET NULL;
 
 -- TOTP (Google Authenticator / Microsoft Authenticator / Authy -- any
--- app that speaks the same RFC 6238 standard) multi-factor authentication
--- for admin accounts. totp_secret is written by POST /auth/totp/setup but
--- does NOT make login require a code by itself -- that only happens once
--- totp_enabled is flipped true by POST /auth/totp/enable, after the admin
--- proves they actually scanned it. Scoped to admins only (see the
--- gap-analysis report): staff share terminals on the café floor, where a
--- second factor is friction with no real payoff, while an admin account
--- can create, delete, and manage every other account. ADD COLUMN IF NOT
--- EXISTS keeps this safe to re-run against a database that predates MFA,
--- same as created_by above.
+-- app that speaks the same RFC 6238 standard) multi-factor authentication.
+-- totp_secret is written by POST /auth/totp/setup but does NOT make login
+-- require a code by itself -- that only happens once totp_enabled is
+-- flipped true by POST /auth/totp/enable, after the account holder proves
+-- they actually scanned it.
+--
+-- Available to BOTH roles, but forced on neither. This was originally
+-- admin-only, on the reasoning that café-floor terminals are shared and a
+-- second factor there is friction with no real payoff. That still argues
+-- against *mandating* MFA for staff -- it does not argue against offering
+-- it. A staff member with their own device can opt in; a shared till
+-- account simply leaves it off. ADD COLUMN IF NOT EXISTS keeps this safe
+-- to re-run against a database that predates MFA, same as created_by.
 ALTER TABLE admins
   ADD COLUMN IF NOT EXISTS totp_secret TEXT,
   ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false;
+
+-- Which café a STAFF account belongs to. Staff are scoped to exactly one
+-- organization, chosen by the admin at the moment the account is created
+-- (POST /admin/users). They can neither create organizations nor read any
+-- other one -- enforced server-side by requireAdminOrService and
+-- orgAccessError in server.js, not merely hidden in the UI.
+--
+-- NULL for admins, deliberately: an admin is not "in" one café, they own
+-- the set of cafés they created, which organizations.created_by already
+-- records. NULL is the normal state for an admin row, not a missing value.
+--
+-- ON DELETE SET NULL matches created_by above: deleting an organization
+-- must not cascade into deleting the staff accounts attached to it. Such
+-- an account survives with no organization, which orgAccessError treats as
+-- "can read nothing" until an admin reassigns it.
+ALTER TABLE admins
+  ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_admins_organization_id ON admins(organization_id);
 
 -- One-time recovery codes for an admin who enabled TOTP and then lost
 -- their authenticator device. Generated once, when TOTP is enabled
