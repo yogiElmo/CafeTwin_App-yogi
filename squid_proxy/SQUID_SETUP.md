@@ -69,12 +69,19 @@ per-PC setup is needed — see any "squid transparent proxy" guide.
 
 Example: dashboard flags **ST-07** for bandwidth hogging.
 
-1. Edit `/etc/squid/squid.conf`, find Section 5, uncomment:
+1. Edit `/etc/squid/squid.conf`, find Section 5, and uncomment just that
+   station's line inside its `CAFETWIN:THROTTLE:ST-07` marker block:
 
    ```
-   delay_access 2 allow st_07
-   delay_access 2 deny all
+   delay_access 1 allow st_07
    ```
+
+   Pool **1** is the strict 10 Mbps per-station pool, and it has to stay
+   ahead of the café-wide pool 2: Squid hands each request to the first
+   pool whose `delay_access` matches and stops there, so a station listed
+   only behind the café-wide pool would never actually be throttled.
+   (`delay_access 1 deny all` and the pool 2 rules below it are already
+   active — leave them alone.)
 
 2. Reload without dropping connections:
 
@@ -85,7 +92,7 @@ Example: dashboard flags **ST-07** for bandwidth hogging.
 3. ST-07 is now capped at **10 Mbps**. Watch the CaféTwin station detail
    chart — latency for the other stations should recover within a minute.
 
-4. When the rush is over, comment the lines out again and reconfigure.
+4. When the rush is over, comment that line out again and reconfigure.
 
 ## 5. Verifying it works
 

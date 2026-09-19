@@ -40,7 +40,9 @@ TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
 if [[ "$ACTION" == "on" ]]; then
-  # Uncomment the single "delay_access 2 allow st_XX" line between markers.
+  # Uncomment the single "delay_access 1 allow st_XX" line between markers.
+  # (Pool 1 is the strict per-station pool; it is matched ahead of the
+  # café-wide pool 2. The pattern below is pool-number-agnostic anyway.)
   awk -v start="$START" -v end="$END" '
     $0 == start { inblock=1; print; next }
     $0 == end   { inblock=0; print; next }
