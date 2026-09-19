@@ -77,6 +77,26 @@ class AuthService {
   static const String _usernameKey = 'cafetwin_username';
   static const String _organizationIdKey = 'cafetwin_organization_id';
 
+  /// How long to wait on a backend call before giving up.
+  ///
+  /// Deliberately generous. The backend runs on Render's free tier, which
+  /// spins the instance down when idle and warns that the next request can
+  /// be "delayed by 50 seconds or more" while it wakes. The old 8-second
+  /// timeout was shorter than that, so the first login after a quiet spell
+  /// reliably failed with "Could not reach the backend" -- while the
+  /// request it gave up on was busy waking the server, which then answered
+  /// in well under a second for whoever tried next.
+  ///
+  /// The cost of a long timeout is that a genuinely unreachable backend
+  /// takes this long to report. [LoginScreen] covers that by explaining
+  /// what the wait means after a few seconds, so it reads as "waking up"
+  /// rather than "hung".
+  static const Duration requestTimeout = Duration(seconds: 60);
+
+  /// How long the login screen waits before telling the user the server is
+  /// probably waking up. Comfortably longer than a warm response (<1s).
+  static const Duration coldStartHintAfter = Duration(seconds: 6);
+
   /// Organization a STAFF account is assigned to, as returned by
   /// `POST /auth/login`. Null for admins, who pick from their own list
   /// instead of belonging to one café.
@@ -158,7 +178,7 @@ class AuthService {
               if (totpCode != null && totpCode.isNotEmpty) 'totpCode': totpCode,
             }),
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
 
       if (resp.statusCode == 200) {
         final Map<String, dynamic> body =
@@ -321,7 +341,7 @@ class AuthService {
             Uri.parse('${ApiService.baseUrl}/organizations'),
             headers: ApiService.authHeaders,
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 200) {
         final List<dynamic> body = jsonDecode(resp.body) as List<dynamic>;
         return body
@@ -366,7 +386,7 @@ class AuthService {
             Uri.parse('${ApiService.baseUrl}/organizations/$id'),
             headers: ApiService.authHeaders,
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 200) {
         return jsonDecode(resp.body) as Map<String, dynamic>;
       }
@@ -394,7 +414,7 @@ class AuthService {
             Uri.parse('${ApiService.baseUrl}/organizations/$id'),
             headers: ApiService.authHeaders,
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 204) {
         return null;
       }
@@ -423,7 +443,7 @@ class AuthService {
             Uri.parse('${ApiService.baseUrl}/admin/users/$username'),
             headers: ApiService.authHeaders,
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 204) {
         return null;
       }
@@ -457,7 +477,7 @@ class AuthService {
             Uri.parse('${ApiService.baseUrl}/admin/users'),
             headers: ApiService.authHeaders,
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 200) {
         final List<dynamic> body = jsonDecode(resp.body) as List<dynamic>;
         return body
@@ -499,7 +519,7 @@ class AuthService {
               if (organizationId != null) 'organizationId': organizationId,
             }),
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 201) {
         return null;
       }
@@ -542,7 +562,7 @@ class AuthService {
             Uri.parse('${ApiService.baseUrl}/auth/totp/status'),
             headers: ApiService.authHeaders,
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 200) {
         final Map<String, dynamic> body =
             jsonDecode(resp.body) as Map<String, dynamic>;
@@ -568,7 +588,7 @@ class AuthService {
             Uri.parse('${ApiService.baseUrl}/auth/totp/setup'),
             headers: ApiService.authHeaders,
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 200) {
         final Map<String, dynamic> body =
             jsonDecode(resp.body) as Map<String, dynamic>;
@@ -603,7 +623,7 @@ class AuthService {
             headers: ApiService.authHeaders,
             body: jsonEncode(<String, String>{'totpCode': totpCode}),
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 200) {
         final Map<String, dynamic> body =
             jsonDecode(resp.body) as Map<String, dynamic>;
@@ -639,7 +659,7 @@ class AuthService {
             headers: ApiService.authHeaders,
             body: jsonEncode(<String, String>{'password': password, 'pin': pin}),
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 204) {
         return null;
       }
@@ -668,7 +688,7 @@ class AuthService {
             headers: ApiService.authHeaders,
             body: jsonEncode(<String, String>{'password': password, 'pin': pin}),
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(requestTimeout);
       if (resp.statusCode == 200) {
         final Map<String, dynamic> body =
             jsonDecode(resp.body) as Map<String, dynamic>;

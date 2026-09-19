@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/station.dart';
@@ -48,6 +50,13 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _submitting = false;
   bool _checkingSession = true;
 
+  /// True once a request has been in flight longer than a warm backend
+  /// would ever take. The backend is on Render's free tier, which sleeps
+  /// when idle and can take the best part of a minute to wake; without
+  /// this the user just sees a spinner and assumes it has hung.
+  bool _slowRequest = false;
+  Timer? _slowRequestTimer;
+
   /// True once the backend has responded to a login attempt with
   /// `requiresTotp: true` -- i.e. password+PIN were correct, but this
   /// account has MFA enabled and needs a code too. Reveals the
@@ -92,6 +101,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _passwordController.dispose();
     _pinController.dispose();
     _totpController.dispose();
+    _slowRequestTimer?.cancel();
     super.dispose();
   }
 
@@ -190,17 +200,25 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _submitting = true;
       _error = null;
+      _slowRequest = false;
     });
+    _slowRequestTimer?.cancel();
+    _slowRequestTimer = Timer(AuthService.coldStartHintAfter, () {
+      if (mounted && _submitting) setState(() => _slowRequest = true);
+    });
+
     final LoginResult result = await AuthService.login(
       username: _usernameController.text.trim(),
       password: _passwordController.text,
       pin: _pinController.text.trim(),
       totpCode: _needsTotp ? _totpController.text.trim() : null,
     );
+    _slowRequestTimer?.cancel();
     if (!mounted) return;
     if (!result.success) {
       setState(() {
         _submitting = false;
+        _slowRequest = false;
         _error = result.error;
         // Sticky once true within this attempt -- a wrong code re-shows
         // the field rather than collapsing it back to a plain error.
@@ -331,6 +349,21 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: TextStyle(
                             fontSize: 13,
                             color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ],
+                      // Shown only once a request has outlasted what a warm
+                      // backend takes, so a free-tier cold start reads as
+                      // "waking up" rather than "broken". See
+                      // AuthService.requestTimeout.
+                      if (_slowRequest) ...<Widget>[
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Waking the server — it sleeps when idle and can '
+                          'take up to a minute to start. Hang on…',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFFCC9A48),
                           ),
                         ),
                       ],
