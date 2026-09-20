@@ -40,7 +40,7 @@ jobs:
       run:
         working-directory: cafetwin_backend_devops
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Installs a specific PostgreSQL client major version rather than
       # whatever "postgresql-client" happens to resolve to on the runner's
