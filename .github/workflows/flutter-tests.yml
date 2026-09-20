@@ -44,8 +44,8 @@ jobs:
           # exist -- this project's root widget is CafeTwinApp, so that
           # stale boilerplate fails `flutter analyze`/`flutter test`. Our
           # real suite (test/rules_engine_test.dart, insights_engine_test.dart,
-          # login_screen_test.dart) covers this app; drop the placeholder so
-          # it can't shadow them.
+          # login_screen_test.dart, cafe_state_test.dart) covers this app;
+          # drop the placeholder so it can't shadow them.
           rm -f test/widget_test.dart
 
       - run: flutter pub get
@@ -59,4 +59,4 @@ jobs:
       # Explicit file list (not a bare `flutter test`) so a stray
       # regenerated test/widget_test.dart -- see the analyzer exclude
       # in analysis_options.yaml -- can never be picked up and run.
-      - run: flutter test test/rules_engine_test.dart test/insights_engine_test.dart test/login_screen_test.dart
+      - run: flutter test test/rules_engine_test.dart test/insights_engine_test.dart test/login_screen_test.dart test/cafe_state_test.dart
