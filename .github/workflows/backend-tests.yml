@@ -46,7 +46,7 @@ jobs:
       PGPASSWORD: cafetwin_ci
       JWT_SECRET: ci-test-secret-do-not-use-in-production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
