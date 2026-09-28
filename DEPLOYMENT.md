@@ -101,7 +101,11 @@ Easiest path, no server to manage:
 2. Once it's deployed, open the Render Postgres instance's **Shell** (or
    connect with `psql` using the external connection string Render
    shows you) and run the contents of `cafetwin_backend_devops/init.sql`
-   once, to create the tables.
+   once, to create the tables. Every statement in it is safe to re-run,
+   so **run it again after pulling backend changes** that touch it --
+   e.g. the report-entry unique index, which `POST
+   /organizations/:orgId/report-entries` needs (until it exists, saving a
+   report entry fails and the server log says to apply `init.sql`).
 3. Copy the API's URL, e.g. `https://cafetwin-api.onrender.com`.
 
 ### 4. Point the deployed app at the live backend

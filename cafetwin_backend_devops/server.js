@@ -12,6 +12,7 @@ const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const { Pool } = require('pg');
 const squidController = require('./squid_controller');
+const { startTelemetryRetention } = require('./retention');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -1076,7 +1077,10 @@ app.post('/stations/:stationId/alerts', async (req, res) => {
     return res.status(400).json({ error: 'Missing one or more required alert fields.' });
   }
 
-  const alertId = `${stationId}-${ruleCode}-${Date.now()}`;
+  // Random suffix so two alerts for the same station and rule in the same
+  // millisecond (e.g. two dashboards open on one café) can't collide on
+  // the primary key.
+  const alertId = `${stationId}-${ruleCode}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
   try {
     // Checked before the insert, not just for tidiness: a NET-BW/NET-LAT
     // alert below tells the Squid gateway to throttle this station, so an
@@ -1256,30 +1260,33 @@ app.post('/organizations/:orgId/report-entries', async (req, res) => {
     const denied = await orgAccessError(req, orgId);
     if (denied) return res.status(denied.status).json({ error: denied.error });
 
-    const existing = await pool.query(
-      `SELECT id, occurrences FROM report_entries
-       WHERE organization_id = $1 AND kind = $2 AND COALESCE(station_id, '') = COALESCE($3, '') AND title = $4`,
-      [orgId, kind, stationId, title]
-    );
-
-    if (existing.rows.length > 0) {
-      const result = await pool.query(
-        `UPDATE report_entries SET detail = $2, impact = $3, last_seen = now(), occurrences = occurrences + 1
-         WHERE id = $1 RETURNING *`,
-        [existing.rows[0].id, detail, impact]
-      );
-      return res.json(result.rows[0]);
-    }
-
-    const newId = `REC-${Date.now()}`;
+    // A single atomic upsert against uq_report_entries_identity (init.sql).
+    // This used to be SELECT-then-INSERT, so two requests for the same
+    // entry arriving together could both miss and insert duplicates; and
+    // the id was REC-<milliseconds>, so two different entries in the same
+    // millisecond collided on the primary key. `xmax = 0` is true only for
+    // a freshly inserted row, which is how 201 vs 200 is told apart.
     const result = await pool.query(
       `INSERT INTO report_entries
         (id, organization_id, station_id, station_name, category, kind, title, detail, impact, first_seen, last_seen)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now()) RETURNING *`,
-      [newId, orgId, stationId, stationName, category, kind, title, detail, impact]
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now())
+       ON CONFLICT (organization_id, kind, (COALESCE(station_id, '')), title) DO UPDATE
+         SET detail = EXCLUDED.detail,
+             impact = EXCLUDED.impact,
+             last_seen = now(),
+             occurrences = report_entries.occurrences + 1
+       RETURNING *, (xmax = 0) AS inserted`,
+      [`REC-${crypto.randomUUID()}`, orgId, stationId, stationName, category, kind, title, detail, impact]
     );
-    res.status(201).json(result.rows[0]);
+    const { inserted, ...entry } = result.rows[0];
+    res.status(inserted ? 201 : 200).json(entry);
   } catch (err) {
+    if (err.code === '42P10') {
+      // "no unique or exclusion constraint matching the ON CONFLICT
+      // specification": this database predates uq_report_entries_identity.
+      console.error('[report-entries] database schema is out of date -- apply the current '
+        + 'init.sql (psql -f init.sql, or GET /admin/bootstrap) to add uq_report_entries_identity.');
+    }
     console.error(err);
     res.status(500).json({ error: 'Something went wrong saving the report entry.' });
   }
@@ -1322,6 +1329,8 @@ if (require.main === module) {
     console.error('[auth] API_KEY is not set in production -- service callers (simulate.js) '
       + 'and anonymous requests will be rejected. Logged-in users are unaffected.');
   }
+  // Not started when required by tests: they manage their own rows.
+  startTelemetryRetention(pool);
   app.listen(PORT, () => {
     console.log(`CaféTwin backend listening on http://localhost:${PORT}`);
   });
