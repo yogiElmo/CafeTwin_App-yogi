@@ -30,6 +30,26 @@ const path = require('path');
 
 const app = express();
 
+// Behind a reverse proxy (Render, Railway, nginx) every request arrives
+// from the proxy's address, so without this req.ip is the same for every
+// client: the rate limiters below would then share ONE bucket across all
+// users (ten bad logins from anyone would lock everyone out of login), and
+// auth_sessions.ip would record the proxy instead of the device.
+//
+// Opt-in via TRUST_PROXY rather than always on: trusting X-Forwarded-For
+// when the server is exposed directly (e.g. docker-compose on a LAN) would
+// let a client pick its own IP and dodge rate limiting entirely. Set it to
+// the number of proxy hops in front of the app ("1" on Render -- see
+// render.yaml), or any value Express's "trust proxy" setting accepts.
+function parseTrustProxy(value) {
+  if (value === undefined || value === '') return false;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (/^\d+$/.test(value)) return Number(value);
+  return value;
+}
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
+
 // --- Auth (JWT) -----------------------------------------------------------
 // JWT_SECRET should be a long random value set in the environment for
 // production (Render's render.yaml already generates one). If unset, a
@@ -115,6 +135,24 @@ function touchSession(jti) {
     .catch((err) => console.error('[auth] failed to update session last_seen_at:', err));
 }
 
+// Decides a request that carries no Bearer token -- i.e. a service caller
+// such as simulate.js, or an anonymous one. With API_KEY set, only a
+// matching x-api-key passes (compared in constant time, so response timing
+// doesn't leak the key a byte at a time). With no API_KEY, anonymous access
+// is allowed ONLY outside production: that zero-config mode is what keeps
+// `node server.js` usable locally, but in production a missing API_KEY is
+// a misconfiguration, and it must fail closed rather than silently open
+// every write and organization read to the internet.
+function isAllowedServiceCaller(req) {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) return process.env.NODE_ENV !== 'production';
+  const supplied = req.get('x-api-key');
+  if (!supplied) return false;
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(apiKey);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 // Write routes accept EITHER a valid JWT (issued by POST /auth/login --
 // the app's real authenticated path) OR the legacy x-api-key shared
 // secret (for service-to-service callers such as simulate.js that never
@@ -129,8 +167,7 @@ async function requireAuth(req, res, next) {
     touchSession(auth.decoded.jti);
     return next();
   }
-  if (!process.env.API_KEY) return next();
-  if (req.get('x-api-key') === process.env.API_KEY) return next();
+  if (isAllowedServiceCaller(req)) return next();
   return res.status(401).json({ error: 'Missing or invalid credentials (Bearer token or x-api-key).' });
 }
 app.use((req, res, next) => {
@@ -179,9 +216,10 @@ async function requireAnyUser(req, res, next) {
 // no role attached. So: a Bearer token must carry role 'admin', while a
 // valid x-api-key is still accepted as a service caller.
 //
-// The `!API_KEY` escape hatch mirrors requireAuth's: with no API_KEY
-// configured (the default for local development) an unauthenticated caller
-// is let through, exactly as it was before this guard existed. A staff
+// The no-API_KEY escape hatch mirrors requireAuth's (see
+// isAllowedServiceCaller): with no API_KEY configured, outside production,
+// an unauthenticated caller is let through, exactly as it was before this
+// guard existed. A staff
 // Bearer token is still rejected either way -- the token branch is checked
 // first, so having a login never *lowers* what you are allowed to do.
 async function requireAdminOrService(req, res, next) {
@@ -199,8 +237,7 @@ async function requireAdminOrService(req, res, next) {
     touchSession(auth.decoded.jti);
     return next();
   }
-  if (!process.env.API_KEY) return next();
-  if (req.get('x-api-key') === process.env.API_KEY) return next();
+  if (isAllowedServiceCaller(req)) return next();
   return res.status(401).json({ error: 'Missing or invalid credentials (Bearer token or x-api-key).' });
 }
 
@@ -219,8 +256,7 @@ async function requireAnyUserOrService(req, res, next) {
     touchSession(auth.decoded.jti);
     return next();
   }
-  if (!process.env.API_KEY) return next();
-  if (req.get('x-api-key') === process.env.API_KEY) return next();
+  if (isAllowedServiceCaller(req)) return next();
   return res.status(401).json({ error: 'Missing or invalid credentials (Bearer token or x-api-key).' });
 }
 
@@ -282,6 +318,14 @@ async function stationOrgAccessError(req, stationId) {
   );
   if (result.rows.length === 0) return { status: 404, error: 'Station not found.' };
   return orgAccessError(req, result.rows[0].organization_id);
+}
+
+// Same check, for routes addressed by alert id (PATCH /alerts/:alertId).
+async function alertOrgAccessError(req, alertId) {
+  if (!req.user) return null;
+  const result = await pool.query('SELECT station_id FROM alerts WHERE id = $1', [alertId]);
+  if (result.rows.length === 0) return { status: 404, error: 'Alert not found.' };
+  return stationOrgAccessError(req, result.rows[0].station_id);
 }
 
 // --- Database ------------------------------------------------------------
@@ -985,6 +1029,9 @@ app.post('/stations/:stationId/telemetry', async (req, res) => {
   }
 
   try {
+    const denied = await stationOrgAccessError(req, stationId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const result = await pool.query(
       `INSERT INTO telemetry
         (station_id, cpu_temp, gpu_temp, cpu_load, gpu_load, bandwidth_mbps, latency_ms, packet_loss, occupied, session_minutes, game)
@@ -1031,6 +1078,12 @@ app.post('/stations/:stationId/alerts', async (req, res) => {
 
   const alertId = `${stationId}-${ruleCode}-${Date.now()}`;
   try {
+    // Checked before the insert, not just for tidiness: a NET-BW/NET-LAT
+    // alert below tells the Squid gateway to throttle this station, so an
+    // account from another café must not be able to raise one here.
+    const denied = await stationOrgAccessError(req, stationId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const result = await pool.query(
       `INSERT INTO alerts (id, station_id, rule_code, category, severity, message, suggestion)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
@@ -1058,6 +1111,9 @@ app.post('/stations/:stationId/alerts', async (req, res) => {
 app.post('/stations/:stationId/alerts/:ruleCode/resolve', async (req, res) => {
   const { stationId, ruleCode } = req.params;
   try {
+    const denied = await stationOrgAccessError(req, stationId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const result = await pool.query(
       `UPDATE alerts SET resolved = true
        WHERE id = (
@@ -1108,6 +1164,9 @@ app.patch('/alerts/:alertId', async (req, res) => {
   const { alertId } = req.params;
   const { acknowledged, resolved } = req.body;
   try {
+    const denied = await alertOrgAccessError(req, alertId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const result = await pool.query(
       `UPDATE alerts SET
          acknowledged = COALESCE($2, acknowledged),
@@ -1141,6 +1200,9 @@ app.post('/stations/:stationId/sessions/start', async (req, res) => {
   const { stationId } = req.params;
   const { game = '' } = req.body;
   try {
+    const denied = await stationOrgAccessError(req, stationId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const result = await pool.query(
       `INSERT INTO sessions (station_id, game) VALUES ($1, $2) RETURNING *`,
       [stationId, game]
@@ -1155,6 +1217,9 @@ app.post('/stations/:stationId/sessions/start', async (req, res) => {
 app.post('/stations/:stationId/sessions/end', async (req, res) => {
   const { stationId } = req.params;
   try {
+    const denied = await stationOrgAccessError(req, stationId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const result = await pool.query(
       `UPDATE sessions SET ended_at = now()
        WHERE id = (
@@ -1188,6 +1253,9 @@ app.post('/organizations/:orgId/report-entries', async (req, res) => {
   }
 
   try {
+    const denied = await orgAccessError(req, orgId);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
     const existing = await pool.query(
       `SELECT id, occurrences FROM report_entries
        WHERE organization_id = $1 AND kind = $2 AND COALESCE(station_id, '') = COALESCE($3, '') AND title = $4`,
@@ -1250,6 +1318,10 @@ const PORT = process.env.PORT || 3000;
 // When required from a test file (`require('../server')`), the caller
 // gets the Express app to drive with supertest instead of a live socket.
 if (require.main === module) {
+  if (process.env.NODE_ENV === 'production' && !process.env.API_KEY) {
+    console.error('[auth] API_KEY is not set in production -- service callers (simulate.js) '
+      + 'and anonymous requests will be rejected. Logged-in users are unaffected.');
+  }
   app.listen(PORT, () => {
     console.log(`CaféTwin backend listening on http://localhost:${PORT}`);
   });

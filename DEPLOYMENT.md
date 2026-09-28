@@ -201,10 +201,20 @@ endpoints (`GET /organizations/:id`, `/organizations/:orgId/alerts`,
 to be entirely unauthenticated -- anyone holding a UUID could read a
 café's stations, alerts and telemetry. They now follow the same rule the
 write gate has always used: anonymous callers pass only when `API_KEY` is
-unset (the zero-config local-dev default), and are rejected once it is
-set. Render's blueprint generates an `API_KEY`, so they are closed in the
-deployed environment. This affects *anonymous* callers only -- a
-logged-in staff member is scoped to their own café either way.
+unset **and** `NODE_ENV` is not `production` (the zero-config local-dev
+default), and are rejected otherwise. Render's blueprint generates an
+`API_KEY`, so they are closed in the deployed environment; a production
+server with no `API_KEY` fails closed rather than open. For
+docker-compose (which runs with `NODE_ENV=production`), put `API_KEY` in
+`.env` so both the backend and `simulate.js` pick it up. This affects
+*anonymous* callers only -- a logged-in staff member is scoped to their
+own café either way, for writes (telemetry, alerts, sessions, report
+entries) as well as reads.
+
+Behind a reverse proxy, set `TRUST_PROXY` to the number of proxy hops
+(`1` on Render, already in `render.yaml`). Without it every request looks
+like it comes from the proxy, so rate limits -- including the 10-per-minute
+login limit -- are shared by all users at once.
 
 Practical ordering note: assigning staff to a café needs at least one
 organization to exist, so create the organization before creating the

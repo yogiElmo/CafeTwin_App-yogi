@@ -42,6 +42,11 @@ services:
       PGUSER: ${POSTGRES_USER:-postgres}
       PGPASSWORD: ${POSTGRES_PASSWORD:-cafetwin123}
       NODE_ENV: production
+      # Required for simulate.js (and any other non-login caller): in
+      # production an unset API_KEY rejects anonymous requests. Put the same
+      # value in .env so `node simulate.js` sends it.
+      API_KEY: ${API_KEY:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
     ports:
       - "3000:3000"
 

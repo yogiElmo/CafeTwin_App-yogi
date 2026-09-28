@@ -250,6 +250,135 @@ describe('staff organization scoping (requires a live database)', () => {
     expect(res.status).toBe(200);
   });
 
+  // --- writing to organizations ------------------------------------------
+  // The write routes used to check only THAT the caller was logged in, not
+  // WHICH café they belonged to: staff from café A could post telemetry,
+  // raise alerts (including NET-BW, which throttles the station at the
+  // gateway), resolve alerts and write report entries for café B.
+
+  async function stationOf(orgId) {
+    const result = await pool.query(
+      'SELECT id FROM stations WHERE organization_id = $1 LIMIT 1',
+      [orgId]
+    );
+    return result.rows[0] && result.rows[0].id;
+  }
+
+  const telemetry = {
+    cpuTemp: 50, gpuTemp: 50, cpuLoad: 10, gpuLoad: 10,
+    bandwidthMbps: 100, latencyMs: 10, packetLoss: 0,
+  };
+  const netBwAlert = {
+    ruleCode: 'NET-BW',
+    category: 'network',
+    severity: 'warning',
+    message: 'bandwidth high',
+    suggestion: 'throttle',
+  };
+
+  it('lets staff post telemetry for their own station', async () => {
+    if (!dbUp || !stationAId) return;
+    const res = await request(app)
+      .post(`/stations/${stationAId}/telemetry`)
+      .set('Authorization', `Bearer ${staffAToken}`)
+      .send(telemetry);
+    expect(res.status).toBe(201);
+  });
+
+  it("blocks staff from posting telemetry to another organization's station", async () => {
+    if (!dbUp) return;
+    const stationBId = await stationOf(orgBId);
+    const res = await request(app)
+      .post(`/stations/${stationBId}/telemetry`)
+      .set('Authorization', `Bearer ${staffAToken}`)
+      .send(telemetry);
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks an admin from raising an alert on another admin's station", async () => {
+    if (!dbUp) return;
+    const stationBId = await stationOf(orgBId);
+    const res = await request(app)
+      .post(`/stations/${stationBId}/alerts`)
+      .set('Authorization', `Bearer ${adminAToken}`)
+      .send(netBwAlert);
+    expect(res.status).toBe(403);
+
+    const rows = await pool.query('SELECT 1 FROM alerts WHERE station_id = $1', [stationBId]);
+    expect(rows.rows).toHaveLength(0);
+  });
+
+  it("blocks staff from resolving or updating another organization's alerts", async () => {
+    if (!dbUp) return;
+    const stationBId = await stationOf(orgBId);
+    const created = await request(app)
+      .post(`/stations/${stationBId}/alerts`)
+      .set('Authorization', `Bearer ${adminBToken}`)
+      .send(netBwAlert);
+    expect(created.status).toBe(201);
+
+    const resolve = await request(app)
+      .post(`/stations/${stationBId}/alerts/NET-BW/resolve`)
+      .set('Authorization', `Bearer ${staffAToken}`);
+    expect(resolve.status).toBe(403);
+
+    const patch = await request(app)
+      .patch(`/alerts/${created.body.id}`)
+      .set('Authorization', `Bearer ${staffAToken}`)
+      .send({ resolved: true });
+    expect(patch.status).toBe(403);
+
+    const row = await pool.query('SELECT resolved FROM alerts WHERE id = $1', [created.body.id]);
+    expect(row.rows[0].resolved).toBe(false);
+
+    // ...while the owning admin still can.
+    const ownPatch = await request(app)
+      .patch(`/alerts/${created.body.id}`)
+      .set('Authorization', `Bearer ${adminBToken}`)
+      .send({ acknowledged: true });
+    expect(ownPatch.status).toBe(200);
+  });
+
+  it("blocks staff from starting or ending sessions on another organization's station", async () => {
+    if (!dbUp) return;
+    const stationBId = await stationOf(orgBId);
+    const start = await request(app)
+      .post(`/stations/${stationBId}/sessions/start`)
+      .set('Authorization', `Bearer ${staffAToken}`)
+      .send({ game: 'x' });
+    expect(start.status).toBe(403);
+
+    const end = await request(app)
+      .post(`/stations/${stationBId}/sessions/end`)
+      .set('Authorization', `Bearer ${staffAToken}`);
+    expect(end.status).toBe(403);
+  });
+
+  it("blocks staff from writing report entries into another organization", async () => {
+    if (!dbUp) return;
+    const entry = { kind: 'optimization', title: `t-${stamp}`, detail: 'd' };
+    const other = await request(app)
+      .post(`/organizations/${orgBId}/report-entries`)
+      .set('Authorization', `Bearer ${staffAToken}`)
+      .send(entry);
+    expect(other.status).toBe(403);
+
+    const own = await request(app)
+      .post(`/organizations/${orgAId}/report-entries`)
+      .set('Authorization', `Bearer ${staffAToken}`)
+      .send(entry);
+    expect(own.status).toBe(201);
+  });
+
+  it('returns 404 for a write to a station that does not exist', async () => {
+    if (!dbUp) return;
+    const res = await request(app)
+      .post('/stations/ST-does-not-exist/telemetry')
+      .set('Authorization', `Bearer ${staffAToken}`)
+      .send(telemetry);
+    expect(res.status).toBe(404);
+  });
+
   // --- MFA is open to staff ----------------------------------------------
 
   it('lets a staff account read and start its own MFA setup', async () => {

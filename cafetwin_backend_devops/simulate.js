@@ -2,7 +2,17 @@
 // the same way the real Flutter app eventually would. Run this after server.js
 // is already running in another window.
 
-const API_BASE = 'http://localhost:3000';
+require('dotenv').config();
+
+const API_BASE = process.env.API_BASE || 'http://localhost:3000';
+
+// The simulator has no login, so it authenticates as a service caller with
+// the shared API_KEY. Required whenever the server has API_KEY set, or runs
+// with NODE_ENV=production (as docker-compose does).
+const HEADERS = {
+  'Content-Type': 'application/json',
+  ...(process.env.API_KEY ? { 'x-api-key': process.env.API_KEY } : {}),
+};
 
 // Small helper: random number in a range.
 function rand(min, max) {
@@ -12,7 +22,7 @@ function rand(min, max) {
 async function setupOrganization() {
   const res = await fetch(`${API_BASE}/organizations`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: HEADERS,
     body: JSON.stringify({
       name: 'Diksha Demo Cafe',
       stations: [
@@ -34,7 +44,7 @@ async function sendTelemetry(stationId) {
 
   await fetch(`${API_BASE}/stations/${stationId}/telemetry`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: HEADERS,
     body: JSON.stringify({
       cpuTemp,
       gpuTemp,
@@ -53,7 +63,7 @@ async function sendTelemetry(stationId) {
   if (cpuTemp > 85) {
     await fetch(`${API_BASE}/stations/${stationId}/alerts`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: HEADERS,
       body: JSON.stringify({
         ruleCode: 'HW-CRIT',
         category: 'hardware',
