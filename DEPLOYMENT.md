@@ -106,6 +106,13 @@ Easiest path, no server to manage:
    e.g. the report-entry unique index, which `POST
    /organizations/:orgId/report-entries` needs (until it exists, saving a
    report entry fails and the server log says to apply `init.sql`).
+
+   Once the `DATABASE_URL` repository secret is set (the nightly backup
+   in `db-backup.yml` uses the same one -- see `BACKUP_RESTORE.md`), you
+   don't need `psql` for this: **Actions → Apply database schema → Run
+   workflow**. It backs the database up first (downloadable from the run
+   for 30 days), applies `init.sql` in a single transaction so a failure
+   changes nothing, and checks the expected indexes exist.
 3. Copy the API's URL, e.g. `https://cafetwin-api.onrender.com`.
 
 ### 4. Point the deployed app at the live backend

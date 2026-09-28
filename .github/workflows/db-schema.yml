@@ -1,0 +1,96 @@
+# Applies cafetwin_backend_devops/init.sql to the production database, on
+# demand: Actions tab -> "Apply database schema" -> Run workflow.
+#
+# Run it after merging any change to init.sql. Every statement in init.sql
+# is safe to re-run (CREATE ... IF NOT EXISTS, ADD COLUMN IF NOT EXISTS, a
+# duplicate cleanup that is a no-op once the unique index exists), so
+# running it when nothing changed does nothing.
+#
+# Uses the same DATABASE_URL secret as db-backup.yml (Render dashboard ->
+# your Postgres instance -> Connect -> External Database URL), so there is
+# nothing new to configure if the nightly backup is already working.
+#
+# Safety:
+#   - Takes a full backup first (kept as a workflow artifact for 30 days),
+#     because init.sql can delete rows (duplicate report entries).
+#   - Runs the whole file in ONE transaction with ON_ERROR_STOP: if any
+#     statement fails, nothing is changed.
+#   - Manual trigger only; never runs on push or on a schedule.
+
+name: Apply database schema
+
+env:
+  # Keep in step with db-backup.yml: pg_dump refuses to dump a server newer
+  # than itself.
+  PG_MAJOR_VERSION: "18"
+
+on:
+  workflow_dispatch: {}
+
+# Never let two runs apply the schema at the same time.
+concurrency:
+  group: db-schema
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cafetwin_backend_devops
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check DATABASE_URL is set
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL secret is not set -- see BACKUP_RESTORE.md." >&2
+            exit 1
+          fi
+
+      # Same install as db-backup.yml -- see the comment there.
+      - name: Install PostgreSQL client (v${{ env.PG_MAJOR_VERSION }})
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y "postgresql-client-${PG_MAJOR_VERSION}"
+          echo "/usr/lib/postgresql/${PG_MAJOR_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Back up before changing anything
+        run: |
+          chmod +x scripts/backup.sh
+          BACKUP_DIR="$PWD/backups" ./scripts/backup.sh
+
+      - name: Upload pre-change backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: cafetwin-db-before-schema-${{ github.run_id }}
+          path: cafetwin_backend_devops/backups/*.dump
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Apply init.sql (single transaction)
+        run: psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -q -f init.sql
+
+      - name: Verify
+        run: |
+          # Explicit so a failed connection can never read as "nothing missing".
+          set -euo pipefail
+          missing=$(psql "$DATABASE_URL" -tA -c "
+            SELECT string_agg(name, ', ')
+            FROM unnest(ARRAY[
+              'uq_report_entries_identity',
+              'idx_telemetry_station_recorded',
+              'idx_telemetry_recorded_at',
+              'idx_alerts_station_rule',
+              'idx_sessions_station'
+            ]) AS name
+            WHERE name NOT IN (SELECT indexname FROM pg_indexes)")
+          if [ -n "$missing" ]; then
+            echo "::error::Schema applied but these indexes are missing: $missing" >&2
+            exit 1
+          fi
+          echo "Schema is up to date." | tee -a "$GITHUB_STEP_SUMMARY"
