@@ -55,6 +55,11 @@ services:
         value: "*"   # tighten to your GitHub Pages URL once you know it
       - key: API_KEY
         generateValue: true
+      # Render puts one proxy in front of the app; without this every
+      # request looks like it comes from that proxy, so rate limits are
+      # shared by all users. See the TRUST_PROXY comment in server.js.
+      - key: TRUST_PROXY
+        value: "1"
       # Squid gateway automation - only meaningful if your Squid box has a
       # public IP/port reachable from Render (a home/café LAN behind NAT
       # is NOT reachable by default; you'd need port-forwarding or a
