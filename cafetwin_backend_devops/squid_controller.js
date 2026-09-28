@@ -12,9 +12,14 @@
 //   SQUID_SSH_PORT         default: 22
 //   SQUID_SSH_KEY_PATH     path to a private key readable by the backend
 //   SQUID_SCRIPT_PATH      default: /opt/cafetwin/toggle_throttle.sh
-//   SQUID_SSH_STRICT_HOST_CHECK  "true" to enable host-key checking
-//                                 (default "false" for first-run convenience;
-//                                  set "true" once you've pinned known_hosts)
+//   SQUID_SSH_STRICT_HOST_CHECK  unset (default): trust-on-first-use --
+//                                 the gateway's key is recorded on the first
+//                                 connection and a CHANGED key is refused.
+//                                 "true": only keys already in known_hosts.
+//                                 "false": no checking at all (not
+//                                 recommended -- anyone who can intercept
+//                                 the connection could run commands as root
+//                                 on the gateway).
 
 const { spawn } = require('child_process');
 
@@ -24,7 +29,19 @@ const PORT = process.env.SQUID_SSH_PORT || '22';
 const KEY_PATH = process.env.SQUID_SSH_KEY_PATH || '';
 const SCRIPT_PATH =
   process.env.SQUID_SCRIPT_PATH || '/opt/cafetwin/toggle_throttle.sh';
-const STRICT_HOST_CHECK = process.env.SQUID_SSH_STRICT_HOST_CHECK === 'true';
+const STRICT_HOST_CHECK = {
+  true: 'yes',
+  false: 'no',
+}[process.env.SQUID_SSH_STRICT_HOST_CHECK] || 'accept-new';
+
+// The remote command below is a single string that ssh hands to the
+// gateway's shell and runs under sudo, so anything interpolated into it
+// must be incapable of carrying shell syntax. Station ids are generated
+// server-side (ST-<org>-NN, or ST-NN in older data) and the database's
+// foreign keys already stop unknown ids before this is reached -- this is
+// the check that keeps it safe if either of those ever changes.
+const STATION_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
+const ACTIONS = new Set(['on', 'off']);
 
 const isConfigured = Boolean(HOST);
 
@@ -34,7 +51,7 @@ function runSsh(stationId, action) {
       '-p', PORT,
       '-o', 'BatchMode=yes',
       '-o', 'ConnectTimeout=6',
-      '-o', `StrictHostKeyChecking=${STRICT_HOST_CHECK ? 'yes' : 'no'}`,
+      '-o', `StrictHostKeyChecking=${STRICT_HOST_CHECK}`,
     ];
     if (KEY_PATH) sshArgs.push('-i', KEY_PATH);
     sshArgs.push(
@@ -65,6 +82,12 @@ function runSsh(stationId, action) {
  * @param {"on"|"off"} action
  */
 async function setThrottle(stationId, action) {
+  if (typeof stationId !== 'string' || !STATION_ID_PATTERN.test(stationId) || !ACTIONS.has(action)) {
+    console.error(
+      `[squid_controller] refusing throttle request with unsafe arguments: ${JSON.stringify({ stationId, action })}`
+    );
+    return { ok: false, error: 'invalid stationId or action' };
+  }
   if (!isConfigured) {
     console.log(
       `[squid_controller] DRY RUN (SQUID_HOST not set): would set ${stationId} throttle=${action}`
@@ -87,4 +110,4 @@ const release = (stationId) => setThrottle(stationId, 'off');
 // Matches SQUID_SETUP.md's mapping table.
 const THROTTLE_RULE_CODES = new Set(['NET-BW', 'NET-LAT']);
 
-module.exports = { throttle, release, isConfigured, THROTTLE_RULE_CODES };
+module.exports = { throttle, release, setThrottle, isConfigured, THROTTLE_RULE_CODES };

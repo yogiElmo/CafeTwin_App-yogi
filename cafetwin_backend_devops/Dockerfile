@@ -19,7 +19,10 @@ RUN npm install --omit=dev && \
     npm cache clean --force
 
 # Copy application source
-COPY server.js simulate.js ./
+# Everything server.js loads at runtime: its own modules, plus init.sql
+# for GET /admin/bootstrap. (Only server.js used to be copied, so the
+# container crashed on start looking for squid_controller.js.)
+COPY server.js simulate.js squid_controller.js retention.js init.sql ./
 
 # Create non-root user for security (ISO 27001 — least privilege)
 RUN addgroup -S cafetwin && \

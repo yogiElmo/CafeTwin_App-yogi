@@ -170,3 +170,34 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_admin_id ON auth_sessions(admin_id);
+
+-- Indexes for the hot read paths. Telemetry grows by one row per station
+-- every few seconds and is always read as "latest N for a station"
+-- (GET /stations/:id/telemetry) or pruned by age (TELEMETRY_RETENTION_DAYS
+-- in server.js); without this both are full-table scans that get slower
+-- every day the café is open. Alerts and gameplay sessions are looked up
+-- by station on every resolve / session-end and every org-wide alert list.
+CREATE INDEX IF NOT EXISTS idx_telemetry_station_recorded ON telemetry(station_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_telemetry_recorded_at ON telemetry(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_station_rule ON alerts(station_id, rule_code);
+CREATE INDEX IF NOT EXISTS idx_sessions_station ON sessions(station_id);
+
+-- One report entry per (organization, kind, station, title): POST
+-- /organizations/:orgId/report-entries upserts against this with
+-- INSERT ... ON CONFLICT. It used to SELECT and then INSERT, so two
+-- requests arriving together could both miss and create duplicates.
+--
+-- The DELETE first removes any duplicates that race already produced
+-- (keeping the most recently seen row), since the unique index cannot be
+-- built while they exist. It is a no-op once the index is in place, so
+-- this file stays safe to re-run via /admin/bootstrap.
+DELETE FROM report_entries a
+  USING report_entries b
+  WHERE a.organization_id = b.organization_id
+    AND a.kind = b.kind
+    AND COALESCE(a.station_id, '') = COALESCE(b.station_id, '')
+    AND a.title = b.title
+    AND (a.last_seen, a.id) < (b.last_seen, b.id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_report_entries_identity
+  ON report_entries (organization_id, kind, (COALESCE(station_id, '')), title);
