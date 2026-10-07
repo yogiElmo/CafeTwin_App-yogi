@@ -65,7 +65,7 @@ jobs:
           BACKUP_DIR="$PWD/backups" ./scripts/backup.sh
 
       - name: Upload pre-change backup
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: cafetwin-db-before-schema-${{ github.run_id }}
           path: cafetwin_backend_devops/backups/*.dump
